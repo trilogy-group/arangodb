@@ -373,7 +373,15 @@ TRI_voc_rid_t RocksDBKey::revisionId(RocksDBEntryType type, char const* data,
   TRI_ASSERT(data != nullptr);
   TRI_ASSERT(size >= sizeof(char));
   switch (type) {
-    case RocksDBEntryType::Document:
+    case RocksDBEntryType::Document: {
+      TRI_ASSERT(size >= 2 * sizeof(uint64_t));
+      if (size == 2 * sizeof(uint64_t)) {
+        return uint64FromPersistent(data + size - sizeof(uint64_t));
+      } else {
+        TRI_ASSERT(size == ((2 * sizeof(uint64_t)) + 1));
+        return uint64FromPersistentBigEndian(data + sizeof(uint64_t));
+      }
+    }
     case RocksDBEntryType::VPackIndexValue:
     case RocksDBEntryType::FulltextIndexValue: {
       TRI_ASSERT(size >= (2 * sizeof(uint64_t)));
@@ -413,4 +421,3 @@ VPackSlice RocksDBKey::indexedVPack(char const* data, size_t size) {
   TRI_ASSERT(size > sizeof(uint64_t));
   return VPackSlice(data + sizeof(uint64_t));
 }
-

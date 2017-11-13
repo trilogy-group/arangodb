@@ -60,18 +60,18 @@ namespace arangodb {
 
 class RocksDBOperationResult : public Result {
 public:
-  RocksDBOperationResult() 
+  RocksDBOperationResult()
       : Result(), _keySize(0) {}
-  
-  RocksDBOperationResult(Result const& other) 
+
+  RocksDBOperationResult(Result const& other)
       : Result(other), _keySize(0) {}
-  
-  RocksDBOperationResult(Result&& other) noexcept 
+
+  RocksDBOperationResult(Result&& other) noexcept
       : Result(std::move(other)), _keySize(0) {}
-  
+
   uint64_t keySize() const { return _keySize; }
   void keySize(uint64_t s) { _keySize = s; }
-  
+
 protected:
   uint64_t _keySize;
 };
@@ -79,7 +79,7 @@ protected:
 class RocksDBMethods;
 class RocksDBKeyBounds;
 class RocksDBEngine;
-  
+
 namespace rocksutils {
 
 //// to persistent
@@ -141,7 +141,7 @@ inline double intToDouble(uint64_t i) {
   return d;
 }
 
-template<typename T> 
+template<typename T>
 inline T uintFromPersistent(char const* p) {
 #ifdef TRI_USE_FAST_UNALIGNED_DATA_ACCESS
   return *reinterpret_cast<T const*>(p);
@@ -155,19 +155,36 @@ inline T uintFromPersistent(char const* p) {
     x += 8;
   } while (ptr < end);
   return value;
-#endif 
+#endif
 }
 
-inline uint64_t uint64FromPersistent(char const* p) { 
+inline uint64_t uint64FromPersistent(char const* p) {
   return uintFromPersistent<uint64_t>(p);
 }
 
 inline uint32_t uint32FromPersistent(char const* p) {
-  return uintFromPersistent<uint32_t>(p); 
+  return uintFromPersistent<uint32_t>(p);
 }
 
 inline uint16_t uint16FromPersistent(char const* p) {
-  return uintFromPersistent<uint16_t>(p); 
+  return uintFromPersistent<uint16_t>(p);
+}
+
+template<typename T>
+inline T uintFromPersistentBigEndian(char const* p) {
+  T value = 0;
+  T x = 8 * (sizeof(T) - 1);
+  uint8_t const* ptr = reinterpret_cast<uint8_t const*>(p);
+  uint8_t const* end = ptr + sizeof(T);
+  do {
+    value += static_cast<T>(*ptr++) << x;
+    x -= 8;
+  } while (ptr < end);
+  return value;
+}
+
+inline uint64_t uint64FromPersistentBigEndian(char const* p) {
+  return uintFromPersistentBigEndian<uint64_t>(p);
 }
 
 template<typename T>
@@ -238,7 +255,7 @@ std::pair<TRI_voc_tick_t, TRI_voc_cid_t> mapObjectToCollection(uint64_t);
 std::size_t countKeys(rocksdb::DB*, rocksdb::ColumnFamilyHandle* cf);
 
 /// @brief iterate over all keys in range and count them
-std::size_t countKeyRange(rocksdb::DB*, RocksDBKeyBounds const&, 
+std::size_t countKeyRange(rocksdb::DB*, RocksDBKeyBounds const&,
                           bool prefix_same_as_start);
 
 /// @brief helper method to remove large ranges of data
