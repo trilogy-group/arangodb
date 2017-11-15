@@ -148,49 +148,48 @@ TEST_CASE("RocksDBKeyTest", "[rocksdbkeytest]") {
     key.constructDocument(0, 0);
     auto const& s1 = key.string();
 
-    CHECK(s1.size() == +sizeof(uint64_t) + sizeof(uint64_t));
-    CHECK(s1 == std::string("\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16));
+    CHECK(s1.size() == +sizeof(uint64_t) + sizeof(uint64_t) + sizeof(char));
+    CHECK(s1 == std::string("\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xff", 17));
 
     key.constructDocument(23, 42);
     auto const& s2 = key.string();
 
-    CHECK(s2.size() == +sizeof(uint64_t) + sizeof(uint64_t));
-    CHECK(s2 == std::string("\x17\0\0\0\0\0\0\0\x2a\0\0\0\0\0\0\0", 16));
+    CHECK(s2.size() == +sizeof(uint64_t) + sizeof(uint64_t) + sizeof(char));
+    CHECK(s2 == std::string("\x17\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x2a\xff", 17));
 
     key.constructDocument(255, 255);
     auto const& s3 = key.string();
 
-    CHECK(s3.size() == sizeof(uint64_t) + sizeof(uint64_t));
-    CHECK(s3 == std::string("\xff\0\0\0\0\0\0\0\xff\0\0\0\0\0\0\0", 16));
+    CHECK(s3.size() == sizeof(uint64_t) + sizeof(uint64_t) + sizeof(char));
+    CHECK(s3 == std::string("\xff\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xff\xff", 17));
 
     key.constructDocument(256, 257);
     auto const& s4 = key.string();
 
-    CHECK(s4.size() == sizeof(uint64_t) + sizeof(uint64_t));
-    CHECK(s4 == std::string("\0\x01\0\0\0\0\0\0\x01\x01\0\0\0\0\0\0", 16));
+    CHECK(s4.size() == sizeof(uint64_t) + sizeof(uint64_t) + sizeof(char));
+    CHECK(s4 == std::string("\0\x01\0\0\0\0\0\0\0\0\0\0\0\0\x01\x01\xff", 17));
 
     key.constructDocument(49152, 16384);
     auto const& s5 = key.string();
 
-    CHECK(s5.size() == sizeof(uint64_t) + sizeof(uint64_t));
-    CHECK(s5 == std::string("\0\xc0\0\0\0\0\0\0\0\x40\0\0\0\0\0\0", 16));
+    CHECK(s5.size() == sizeof(uint64_t) + sizeof(uint64_t) + sizeof(char));
+    CHECK(s5 == std::string("\0\xc0\0\0\0\0\0\0\0\0\0\0\0\0\x40\0\xff", 17));
 
     key.constructDocument(12345678901, 987654321);
     auto const& s6 = key.string();
 
-    CHECK(s6.size() == sizeof(uint64_t) + sizeof(uint64_t));
+    CHECK(s6.size() == sizeof(uint64_t) + sizeof(uint64_t) + sizeof(char));
     CHECK(s6 == std::string(
-                    "\x35\x1c\xdc\xdf\x02\0\0\0\xb1\x68\xde\x3a\0\0\0\0", 16));
+                  "\x35\x1c\xdc\xdf\x02\0\0\0\0\0\0\0\x3a\xde\x68\xb1\xff",
+                  17));
 
     key.constructDocument(0xf0f1f2f3f4f5f6f7ULL, 0xf0f1f2f3f4f5f6f7ULL);
     auto const& s7 = key.string();
 
-    CHECK(s7.size() == sizeof(uint64_t) + sizeof(uint64_t));
-    CHECK(
-        s7 ==
-        std::string(
-            "\xf7\xf6\xf5\xf4\xf3\xf2\xf1\xf0\xf7\xf6\xf5\xf4\xf3\xf2\xf1\xf0",
-            16));
+    CHECK(s7.size() == sizeof(uint64_t) + sizeof(uint64_t) + sizeof(char));
+    CHECK(s7 == std::string(
+        "\xf7\xf6\xf5\xf4\xf3\xf2\xf1\xf0\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xff",
+        17));
   }
 
   /// @brief test primary index
@@ -256,7 +255,7 @@ TEST_CASE("RocksDBKeyTest", "[rocksdbkeytest]") {
               sizeof(char));
     CHECK(key2.string() ==
           std::string("\0\0\0\0\0\0\0\0b/1\0!\0\0\0\0\0\0\0\xff", 21));
-    
+
     CHECK(RocksDBKey::vertexId(key1).compare("a/1") == 0);
     CHECK(RocksDBKey::vertexId(key2).compare("b/1") == 0);
 
@@ -330,16 +329,16 @@ TEST_CASE("RocksDBKeyBoundsTest", "[rocksdbkeybounds]") {
     CHECK(cmp->Compare(prefixBegin, key3.string()) < 0);
     CHECK(cmp->Compare(prefixEnd, key3.string()) < 0);
   }
-  
-  
+
+
   /// @brief test hash index with prefix over indexed slice
   SECTION("test_hash_index") {
-    
+
     VPackBuilder lower;
     lower(VPackValue(VPackValueType::Array))(VPackValue("a"))();
     VPackBuilder higher;
     higher(VPackValue(VPackValueType::Array))(VPackValue("b"))();
-    
+
     RocksDBKey key1, key2, key3;
     key1.constructVPackIndexValue(1, lower.slice(), 33);
     key2.constructVPackIndexValue(1, higher.slice(), 33);
@@ -347,9 +346,9 @@ TEST_CASE("RocksDBKeyBoundsTest", "[rocksdbkeybounds]") {
 
     // check the variable length edge prefix
     std::unique_ptr<rocksdb::SliceTransform const> pe(rocksdb::NewFixedPrefixTransform(RocksDBKey::objectIdSize()));
-    
+
     CHECK(pe->InDomain(key1.string()));
-    
+
     // check the correct key bounds comparisons
     RocksDBKeyBounds bounds = RocksDBKeyBounds::VPackIndex(1);
     CHECK(pe->InDomain(bounds.start()));
@@ -363,33 +362,33 @@ TEST_CASE("RocksDBKeyBoundsTest", "[rocksdbkeybounds]") {
     CHECK(memcmp(bounds.end().data(), prefixEnd.data(), prefixEnd.size()) == 0);
     CHECK(prefixBegin.data()[prefixBegin.size()-1] == '\0');
     CHECK(prefixEnd.data()[prefixBegin.size()-1] == '\0');
-    
+
     // prefix is just object id
     auto cmp = std::make_unique<RocksDBVPackComparator>();
     CHECK(cmp->Compare(prefixBegin, prefixEnd) == 0);
     CHECK(cmp->Compare(prefixBegin, key1.string()) < 0);
     CHECK(cmp->Compare(prefixEnd, key1.string()) < 0);
-    
+
     CHECK(cmp->Compare(key1.string(), key2.string()) < 0);
     CHECK(cmp->Compare(key2.string(), key3.string()) < 0);
     CHECK(cmp->Compare(key1.string(), key3.string()) < 0);
-    
+
     CHECK(cmp->Compare(prefixEnd, key3.string()) < 0);
-    
-    
+
+
     VPackBuilder a;
     a(VPackValue(VPackValueType::Array))(VPackValue(1))();
     VPackBuilder b;
     b(VPackValue(VPackValueType::Array))(VPackValue(3))();
     VPackBuilder c;
     c(VPackValue(VPackValueType::Array))(VPackValue(5))();
-    
+
     RocksDBKey key4, key5, key6, key7;
     key4.constructVPackIndexValue(1, a.slice(), 18);
     key5.constructVPackIndexValue(1, b.slice(), 60);
     key6.constructVPackIndexValue(1, b.slice(), 90);
     key7.constructVPackIndexValue(1, c.slice(), 12);
-    
+
     bounds = RocksDBKeyBounds::VPackIndex(1, a.slice(), c.slice());
     CHECK(cmp->Compare(bounds.start(), key4.string()) < 0);
     CHECK(cmp->Compare(key4.string(), bounds.end()) < 0);
