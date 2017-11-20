@@ -59,14 +59,20 @@ void RocksDBKey::constructCollection(TRI_voc_tick_t databaseId,
 
 
 void RocksDBKey::constructDocument(uint64_t collectionId,
-                                   TRI_voc_rid_t revisionId) {
+                                   TRI_voc_rid_t revisionId,
+                                   bool useLittleEndian) {
   _type = RocksDBEntryType::Document;
-  size_t keyLength = 2 * sizeof(uint64_t) + sizeof(char);
+  size_t keyLength = useLittleEndian ? 2 * sizeof(uint64_t)
+                                     : 2 * sizeof(uint64_t) + sizeof(char);
   _buffer.clear();
   _buffer.reserve(keyLength);
   uint64ToPersistent(_buffer, collectionId);
-  uint64ToPersistentBigEndian(_buffer, revisionId);
-  _buffer.push_back(0xFFU); // type byte to signify big-endian revisionId
+  if (useLittleEndian) {
+    uint64ToPersistent(_buffer, revisionId);
+  } else {
+    uint64ToPersistentBigEndian(_buffer, revisionId);
+    _buffer.push_back(0xFFU); // type byte to signify big-endian revisionId
+  }
   TRI_ASSERT(_buffer.size() == keyLength);
   _slice = rocksdb::Slice(_buffer.data(), keyLength);
 }

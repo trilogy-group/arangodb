@@ -71,7 +71,8 @@ class RocksDBKey {
   //////////////////////////////////////////////////////////////////////////////
   /// @brief Create a fully-specified document key
   //////////////////////////////////////////////////////////////////////////////
-  void constructDocument(uint64_t objectId, TRI_voc_rid_t revisionId);
+  void constructDocument(uint64_t objectId, TRI_voc_rid_t revisionId,
+                         bool useLittleEndian = false);
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief Create a fully-specified key for an entry in a primary index
