@@ -93,7 +93,7 @@ RocksDBCollection::RocksDBCollection(LogicalCollection* collection,
         TRI_ERROR_BAD_PARAMETER,
         "volatile collections are unsupported in the RocksDB engine");
   }
-  
+
   addCollectionMapping(_objectId, _logicalCollection->vocbase()->id(),
                        _logicalCollection->cid());
   if (_cacheEnabled) {
@@ -113,7 +113,7 @@ RocksDBCollection::RocksDBCollection(LogicalCollection* collection,
       _cache(nullptr),
       _cachePresent(false),
       _cacheEnabled(static_cast<RocksDBCollection const*>(physical)->_cacheEnabled) {
-  
+
   addCollectionMapping(_objectId, _logicalCollection->vocbase()->id(),
                        _logicalCollection->cid());
   if (_cacheEnabled) {
@@ -1058,7 +1058,7 @@ Result RocksDBCollection::replace(
       return Result(TRI_ERROR_CLUSTER_MUST_NOT_CHANGE_SHARDING_ATTRIBUTES);
     }
   }
-  
+
   VPackSlice const newDoc(builder->slice());
 
   auto state = RocksDBTransactionState::toState(trx);
@@ -1436,8 +1436,12 @@ RocksDBOperationResult RocksDBCollection::removeDocument(
   TRI_ASSERT(trx->state()->isRunning());
   TRI_ASSERT(_objectId != 0);
 
+  RocksDBMethods* mthd = RocksDBTransactionState::toMethods(trx);
   RocksDBKeyLeaser key(trx);
-  key->constructDocument(_objectId, documentId.id());
+  key->constructDocument(_objectId, documentId.id(), true);
+  if (!mthd->Exists(RocksDBColumnFamily::documents(), key.ref())) {
+    key->constructDocument(_objectId, documentId.id());
+  }
 
   blackListKey(key->string().data(), static_cast<uint32_t>(key->string().size()));
 
@@ -1446,7 +1450,6 @@ RocksDBOperationResult RocksDBCollection::removeDocument(
   // document store, if the doc is overwritten with PUT
   // Simon: actually we do, because otherwise the counter recovery is broken
   // if (!isUpdate) {
-  RocksDBMethods* mthd = RocksDBTransactionState::toMethods(trx);
   RocksDBOperationResult res =
       mthd->Delete(RocksDBColumnFamily::documents(), key.ref());
   if (!res.ok()) {
@@ -1517,7 +1520,7 @@ RocksDBOperationResult RocksDBCollection::updateDocument(
   TRI_ASSERT(_objectId != 0);
 
   RocksDBMethods* mthd = RocksDBTransactionState::toMethods(trx);
-  
+
   // We NEED to do the PUT first, otherwise WAL tailing breaks
   RocksDBKeyLeaser newKey(trx);
   newKey->constructDocument(_objectId, newDocumentId.id());
@@ -1534,9 +1537,12 @@ RocksDBOperationResult RocksDBCollection::updateDocument(
     res.keySize(newKey->size());
     return res;
   }
-  
+
   RocksDBKeyLeaser oldKey(trx);
-  oldKey->constructDocument(_objectId, oldDocumentId.id());
+  oldKey->constructDocument(_objectId, oldDocumentId.id(), true);
+  if (!mthd->Exists(RocksDBColumnFamily::documents(), oldKey.ref())) {
+    oldKey->constructDocument(_objectId, oldDocumentId.id());
+  }
   blackListKey(oldKey->string().data(),
                static_cast<uint32_t>(oldKey->string().size()));
 
@@ -1580,8 +1586,12 @@ arangodb::Result RocksDBCollection::lookupDocumentVPack(
   TRI_ASSERT(trx->state()->isRunning());
   TRI_ASSERT(_objectId != 0);
 
+  RocksDBMethods* mthd = RocksDBTransactionState::toMethods(trx);
   RocksDBKeyLeaser key(trx);
-  key->constructDocument(_objectId, documentId.id());
+  key->constructDocument(_objectId, documentId.id(), true);
+  if (!mthd->Exists(RocksDBColumnFamily::documents(), key.ref())) {
+    key->constructDocument(_objectId, documentId.id());
+  }
 
   bool lockTimeout = false;
   if (withCache && useCache()) {
@@ -1602,7 +1612,6 @@ arangodb::Result RocksDBCollection::lookupDocumentVPack(
     }
   }
 
-  RocksDBMethods* mthd = RocksDBTransactionState::toMethods(trx);
   std::string* value = mdr.prepareStringUsage();
   Result res = mthd->Get(RocksDBColumnFamily::documents(), key.ref(), value);
   if (res.ok()) {
@@ -1642,8 +1651,12 @@ arangodb::Result RocksDBCollection::lookupDocumentVPack(
   TRI_ASSERT(trx->state()->isRunning());
   TRI_ASSERT(_objectId != 0);
 
+  RocksDBMethods* mthd = RocksDBTransactionState::toMethods(trx);
   RocksDBKeyLeaser key(trx);
-  key->constructDocument(_objectId, documentId.id());
+  key->constructDocument(_objectId, documentId.id(), true);
+  if (!mthd->Exists(RocksDBColumnFamily::documents(), key.ref())) {
+    key->constructDocument(_objectId, documentId.id());
+  }
 
   bool lockTimeout = false;
   if (withCache && useCache()) {
@@ -1663,8 +1676,6 @@ arangodb::Result RocksDBCollection::lookupDocumentVPack(
   }
 
   std::string value;
-  auto state = RocksDBTransactionState::toState(trx);
-  RocksDBMethods* mthd = state->rocksdbMethods();
   Result res = mthd->Get(RocksDBColumnFamily::documents(), key.ref(), &value);
   TRI_ASSERT(value.data());
   if (res.ok()) {

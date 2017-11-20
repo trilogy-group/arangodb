@@ -57,6 +57,16 @@ void doFromToTest(T num){
   CHECK((x == y));
 }
 
+template <typename T>
+void doFromToTestBigEndian(T num){
+  std::string s;
+  uintToPersistentBigEndian<T>(s,num);
+  T y = uintFromPersistentBigEndian<T>(s.data());
+  CAPTURE(num);
+  CAPTURE(y);
+  CHECK((num == y));
+}
+
 TEST_CASE("TypeConversion", "[type_conv]") {
 
 // @brief Test fixme
@@ -92,11 +102,23 @@ SECTION("test_from_to_persist_int32"){
   doFromToTest(std::numeric_limits<int32_t>::max()/2);
   doFromToTest(std::numeric_limits<int32_t>::max());
 }
+
 SECTION("test_from_to_persist_int32"){
   doFromToTest(std::numeric_limits<int16_t>::min());
   doFromToTest(std::numeric_limits<int16_t>::lowest());
   doFromToTest(std::numeric_limits<int16_t>::max()/2);
   doFromToTest(std::numeric_limits<int16_t>::max());
+}
+
+SECTION("test_from_to_persist_big_endian_uint64"){
+  doFromToTestBigEndian(static_cast<uint64_t>(0x0000000000000000llu));
+  doFromToTestBigEndian(static_cast<uint64_t>(0x000000000000FF00llu));
+  doFromToTestBigEndian(static_cast<uint64_t>(0x0000000000FF0000llu));
+  doFromToTestBigEndian(static_cast<uint64_t>(0x00000000FF000000llu));
+  doFromToTestBigEndian(static_cast<uint64_t>(0x000000FF00000000llu));
+  doFromToTestBigEndian(static_cast<uint64_t>(0x0000FF0000000000llu));
+  doFromToTestBigEndian(static_cast<uint64_t>(0x00FF000000000000llu));
+  doFromToTestBigEndian(static_cast<uint64_t>(0xFF00000000000000llu));
 }
 
 // @brief generate tests

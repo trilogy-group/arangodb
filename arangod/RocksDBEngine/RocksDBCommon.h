@@ -233,6 +233,20 @@ inline void uint16ToPersistent(std::string& out, uint16_t value) {
   return uintToPersistent<uint16_t>(out, value);
 }
 
+template<typename T>
+inline void uintToPersistentBigEndian(std::string& p, T value) {
+  size_t shift = 8 * (sizeof(T) - 1);
+  T mask = static_cast<T>(0xFFU) << shift;
+  do {
+    p.push_back(static_cast<char>((value & mask) >> shift));
+    shift -= 8;
+    mask >>= 8;
+  } while (mask > 0);
+}
+
+inline void uint64ToPersistentBigEndian(std::string& out, uint64_t value) {
+  return uintToPersistentBigEndian<uint64_t>(out, value);
+}
 
 rocksdb::TransactionDB* globalRocksDB();
 RocksDBEngine* globalRocksEngine();
