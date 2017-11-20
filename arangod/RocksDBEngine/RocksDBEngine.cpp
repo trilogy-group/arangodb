@@ -59,6 +59,7 @@
 #include "RocksDBEngine/RocksDBLogValue.h"
 #include "RocksDBEngine/RocksDBOptimizerRules.h"
 #include "RocksDBEngine/RocksDBPrefixExtractor.h"
+#include "RocksDBEngine/RocksDBRecoveryFinalizer.h"
 #include "RocksDBEngine/RocksDBReplicationManager.h"
 #include "RocksDBEngine/RocksDBReplicationTailing.h"
 #include "RocksDBEngine/RocksDBRestHandlers.h"
@@ -128,9 +129,21 @@ RocksDBEngine::RocksDBEngine(application_features::ApplicationServer* server)
   // inherits order from StorageEngine but requires "RocksDBOption" that is used
   // to configure this engine and the MMFiles PersistentIndexFeature
   startsAfter("RocksDBOption");
+  
+  server->addFeature(new RocksDBRecoveryFinalizer(server));
 }
 
-RocksDBEngine::~RocksDBEngine() { delete _db; }
+RocksDBEngine::~RocksDBEngine() {
+  // turn off RocksDBThrottle, and release our pointers to it
+  if (nullptr != _listener.get()) {
+    _listener->StopThread();
+    _listener.reset();
+    _options.listeners.clear();
+  } // if
+
+  delete _db;
+  _db = nullptr;
+}
 
 // inherited from ApplicationFeature
 // ---------------------------------
@@ -352,9 +365,8 @@ void RocksDBEngine::start() {
   // TODO: enable memtable_insert_with_hint_prefix_extractor?
   _options.bloom_locality = 1;
 
-  // Commented out temporarily until the shutdown bug is fixed:
-  //std::shared_ptr<RocksDBThrottle> listener(new RocksDBThrottle);
-  //_options.listeners.push_back(listener);
+  _listener.reset(new RocksDBThrottle);
+  _options.listeners.push_back(_listener);
 
   // this is cfFamilies.size() + 2 ... but _option needs to be set before
   //  building cfFamilies
@@ -490,8 +502,8 @@ void RocksDBEngine::start() {
     FATAL_ERROR_EXIT();
   }
 
-  // mev
-  //listener->SetFamilies(cfHandles);
+  // give throttle access to families
+  _listener->SetFamilies(cfHandles);
 
   // set our column families
   RocksDBColumnFamily::_definitions = cfHandles[0];
@@ -513,11 +525,11 @@ void RocksDBEngine::start() {
                                key.string(), &oldVersion);
   if (dbExisted) {
     if (s.IsNotFound() || oldVersion.data()[0] < version) {
-      LOG_TOPIC(ERR, Logger::ENGINES)
+      LOG_TOPIC(FATAL, Logger::ENGINES)
       << "Your db directory is in an old format. Please delete the directory.";
       FATAL_ERROR_EXIT();
     } else if (oldVersion.data()[0] > version) {
-      LOG_TOPIC(ERR, Logger::ENGINES)
+      LOG_TOPIC(FATAL, Logger::ENGINES)
       << "You are using an old version of ArangoDB, please update "
       << "before opening this dir.";
       FATAL_ERROR_EXIT();
@@ -537,9 +549,9 @@ void RocksDBEngine::start() {
 
   _counterManager->runRecovery();
 
-  double const counter_sync_seconds = 2.5;
+  double const counterSyncSeconds = 2.5;
   _backgroundThread.reset(
-      new RocksDBBackgroundThread(this, counter_sync_seconds));
+      new RocksDBBackgroundThread(this, counterSyncSeconds));
   if (!_backgroundThread->start()) {
     LOG_TOPIC(FATAL, Logger::ENGINES)
         << "could not start rocksdb counter manager";
