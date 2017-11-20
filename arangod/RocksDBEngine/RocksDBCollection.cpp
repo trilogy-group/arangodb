@@ -1382,7 +1382,7 @@ RocksDBOperationResult RocksDBCollection::insertDocument(
   TRI_ASSERT(trx->state()->isRunning());
 
   RocksDBKeyLeaser key(trx);
-  key->constructDocument(_objectId, documentId.id());
+  key->constructDocument(_objectId, documentId.id(), true);
 
   blackListKey(key->string().data(), static_cast<uint32_t>(key->string().size()));
 
@@ -1523,7 +1523,7 @@ RocksDBOperationResult RocksDBCollection::updateDocument(
 
   // We NEED to do the PUT first, otherwise WAL tailing breaks
   RocksDBKeyLeaser newKey(trx);
-  newKey->constructDocument(_objectId, newDocumentId.id());
+  newKey->constructDocument(_objectId, newDocumentId.id(), true);
   // TODO: given that this should have a unique revision ID, do
   // we really need to blacklist the new key?
   blackListKey(newKey->string().data(),
