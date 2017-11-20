@@ -806,7 +806,7 @@ function CollectionSuite () {
       assertEqual(ArangoCollection.TYPE_DOCUMENT, c1.type());
       assertTypeOf("number", c1.type());
 
-      c1.truncate();
+      c1.truncate({ compact: false });
 
       assertEqual(ArangoCollection.STATUS_LOADED, c1.status());
       assertEqual(ArangoCollection.TYPE_DOCUMENT, c1.type());
@@ -833,7 +833,7 @@ function CollectionSuite () {
       assertEqual(ArangoCollection.TYPE_DOCUMENT, c1.type());
       assertTypeOf("number", c1.type());
 
-      c1.truncate();
+      c1.truncate({ compact: false });
 
       assertEqual(ArangoCollection.STATUS_LOADED, c1.status());
       assertEqual(ArangoCollection.TYPE_DOCUMENT, c1.type());
@@ -861,9 +861,8 @@ function CollectionSuite () {
       assertEqual(ArangoCollection.TYPE_DOCUMENT, c1.type());
       assertTypeOf("number", c1.type());
 
-      c1.truncate();
+      c1.truncate({ compact: false });
 
-      assertEqual(ArangoCollection.STATUS_LOADED, c1.status());
       assertEqual(ArangoCollection.TYPE_DOCUMENT, c1.type());
       assertEqual(0, c1.count());
 
@@ -932,7 +931,7 @@ function CollectionSuite () {
       var r4 = c1.revision();
       assertEqual(1, compareStringIds(r4, r3));
 
-      c1.truncate();
+      c1.truncate({ compact: false });
       var r5 = c1.revision();
       assertEqual(1, compareStringIds(r5, r4));
 
@@ -1183,7 +1182,6 @@ function CollectionDbSuite () {
 
       db._truncate(cn);
 
-      assertEqual(ArangoCollection.STATUS_LOADED, c1.status());
       assertEqual(ArangoCollection.TYPE_DOCUMENT, c1.type());
       assertEqual(0, c1.count());
 
