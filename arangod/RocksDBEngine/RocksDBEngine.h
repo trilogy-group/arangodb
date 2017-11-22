@@ -277,6 +277,7 @@ class RocksDBEngine final : public StorageEngine {
  public:
   static std::string const EngineName;
   static std::string const FeatureName;
+  static uint64_t minBigEndianRevision;
 
   /// @brief recovery manager
   RocksDBCounterManager* counterManager() const {

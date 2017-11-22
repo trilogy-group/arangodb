@@ -101,6 +101,7 @@ namespace arangodb {
 
 std::string const RocksDBEngine::EngineName("rocksdb");
 std::string const RocksDBEngine::FeatureName("RocksDBEngine");
+uint64_t minBigEndianRevision(0);
 
 // static variables for all existing column families
 rocksdb::ColumnFamilyHandle* RocksDBColumnFamily::_definitions(nullptr);
@@ -129,7 +130,7 @@ RocksDBEngine::RocksDBEngine(application_features::ApplicationServer* server)
   // inherits order from StorageEngine but requires "RocksDBOption" that is used
   // to configure this engine and the MMFiles PersistentIndexFeature
   startsAfter("RocksDBOption");
-  
+
   server->addFeature(new RocksDBRecoveryFinalizer(server));
 }
 

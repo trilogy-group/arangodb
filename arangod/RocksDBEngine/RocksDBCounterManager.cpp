@@ -363,6 +363,10 @@ void RocksDBCounterManager::readSettings() {
           TRI_HybridLogicalClock(lastHlc);
         }
 
+        if (slice.hasKey("upgradeTo030300Rev")) {
+          RocksDBEngine::minBigEndianRevision = basics::VelocyPackHelper::stringUInt64(slice.get("upgradeTo030300Rev"));
+        }
+
         _lastSync = basics::VelocyPackHelper::stringUInt64(slice.get("lastSync"));
         LOG_TOPIC(TRACE, Logger::ENGINES) << "last background settings sync: "
                                           << _lastSync;
