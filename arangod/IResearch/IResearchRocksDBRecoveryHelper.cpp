@@ -108,12 +108,8 @@ void IResearchRocksDBRecoveryHelper::DeleteCF(uint32_t column_family_id,
         transaction::StandaloneContext::Create(vocbase), coll->cid(),
         arangodb::AccessMode::Type::WRITE);
     for (auto link : links) {
-<<<<<<< HEAD
       link->remove(&trx, LocalDocumentId(rev), Index::OperationMode::internal);
-=======
-      link->remove(&trx, rev, false);
       LOG_TOPIC(TRACE, IResearchFeature::IRESEARCH) << "recovery helper removed: " << rev;
->>>>>>> Initial debugging of RocksDBRecoveryHelper for docs.
     }
     trx.commit();
 
