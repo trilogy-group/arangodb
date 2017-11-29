@@ -51,7 +51,6 @@
 #include "RocksDBEngine/RocksDBColumnFamily.h"
 #include "RocksDBEngine/RocksDBCommon.h"
 #include "RocksDBEngine/RocksDBComparator.h"
-#include "RocksDBEngine/RocksDBCounterManager.h"
 #include "RocksDBEngine/RocksDBIncrementalSync.h"
 #include "RocksDBEngine/RocksDBIndex.h"
 #include "RocksDBEngine/RocksDBIndexFactory.h"
@@ -59,10 +58,11 @@
 #include "RocksDBEngine/RocksDBLogValue.h"
 #include "RocksDBEngine/RocksDBOptimizerRules.h"
 #include "RocksDBEngine/RocksDBPrefixExtractor.h"
-#include "RocksDBEngine/RocksDBRecoveryFinalizer.h"
+#include "RocksDBEngine/RocksDBRecoveryManager.h"
 #include "RocksDBEngine/RocksDBReplicationManager.h"
 #include "RocksDBEngine/RocksDBReplicationTailing.h"
 #include "RocksDBEngine/RocksDBRestHandlers.h"
+#include "RocksDBEngine/RocksDBSettingsManager.h"
 #include "RocksDBEngine/RocksDBThrottle.h"
 #include "RocksDBEngine/RocksDBTransactionCollection.h"
 #include "RocksDBEngine/RocksDBTransactionContextData.h"
@@ -135,7 +135,7 @@ RocksDBEngine::RocksDBEngine(application_features::ApplicationServer* server)
   // to configure this engine and the MMFiles PersistentIndexFeature
   startsAfter("RocksDBOption");
 
-  server->addFeature(new RocksDBRecoveryFinalizer(server));
+  server->addFeature(new RocksDBRecoveryManager(server));
 }
 
 RocksDBEngine::~RocksDBEngine() {
@@ -549,10 +549,10 @@ void RocksDBEngine::start() {
   logger->enable();
 
   TRI_ASSERT(_db != nullptr);
-  _counterManager.reset(new RocksDBCounterManager(_db));
+  _settingsManager.reset(new RocksDBSettingsManager(_db));
   _replicationManager.reset(new RocksDBReplicationManager());
 
-  _counterManager->runRecovery();
+  _settingsManager->retrieveInitialValues();
 
   double const counterSyncSeconds = 2.5;
   _backgroundThread.reset(
@@ -594,8 +594,8 @@ void RocksDBEngine::stop() {
     // stop the press
     _backgroundThread->beginShutdown();
 
-    if (_counterManager) {
-      _counterManager->sync(true);
+    if (_settingsManager) {
+      _settingsManager->sync(true);
     }
 
     // wait until background thread stops
@@ -1001,8 +1001,7 @@ void RocksDBEngine::waitUntilDeletion(TRI_voc_tick_t /* id */, bool /* force */,
 
 // wal in recovery
 bool RocksDBEngine::inRecovery() {
-  // recovery is handled outside of this engine
-  return false;
+  return RocksDBRecoveryManager::instance()->inRecovery();
 }
 
 void RocksDBEngine::recoveryDone(TRI_vocbase_t* vocbase) {
@@ -1020,8 +1019,8 @@ std::string RocksDBEngine::createCollection(
   // in case the collection is created for the first time
   VPackSlice objectId = builder.slice().get("objectId");
   if (objectId.isInteger()) {
-    RocksDBCounterManager::CounterAdjustment adj;
-    _counterManager->updateCounter(objectId.getUInt(), adj);
+    RocksDBSettingsManager::CounterAdjustment adj;
+    _settingsManager->updateCounter(objectId.getUInt(), adj);
   }
 
   TRI_ASSERT(cid != 0);
@@ -1095,11 +1094,11 @@ arangodb::Result RocksDBEngine::dropCollection(
   // Cleanup data-mess
 
   // Unregister counter
-  _counterManager->removeCounter(coll->objectId());
+  _settingsManager->removeCounter(coll->objectId());
 
   // remove from map
   {
-    WRITE_LOCKER(guard, _collectionMapLock);
+    WRITE_LOCKER(guard, _mapLock);
     _collectionMap.erase(collection->cid());
   }
 
@@ -1276,16 +1275,34 @@ void RocksDBEngine::addCollectionMapping(uint64_t objectId, TRI_voc_tick_t did,
     return;
   }
 
-  WRITE_LOCKER(guard, _collectionMapLock);
+  WRITE_LOCKER(guard, _mapLock);
   _collectionMap[objectId] = std::make_pair(did, cid);
+}
+
+void RocksDBEngine::addIndexMapping(uint64_t objectId, Index* index) {
+  if (objectId == 0) {
+    return;
+  }
+
+  WRITE_LOCKER(guard, _mapLock);
+  _indexMap[objectId] = index;
 }
 
 std::pair<TRI_voc_tick_t, TRI_voc_cid_t> RocksDBEngine::mapObjectToCollection(
     uint64_t objectId) const {
-  READ_LOCKER(guard, _collectionMapLock);
+  READ_LOCKER(guard, _mapLock);
   auto it = _collectionMap.find(objectId);
   if (it == _collectionMap.end()) {
     return {0, 0};
+  }
+  return it->second;
+}
+
+Index* RocksDBEngine::mapObjectToIndex(uint64_t objectId) const {
+  READ_LOCKER(guard, _mapLock);
+  auto it = _indexMap.find(objectId);
+  if (it == _indexMap.end()) {
+    return nullptr;
   }
   return it->second;
 }
@@ -1469,7 +1486,7 @@ Result RocksDBEngine::dropDatabase(TRI_voc_tick_t id) {
       return res;
     }
     // delete collection meta-data
-    _counterManager->removeCounter(objectId);
+    _settingsManager->removeCounter(objectId);
     res = globalRocksDBRemove(RocksDBColumnFamily::definitions(),
                               val.first.string(), options);
     if (res.fail()) {
@@ -1615,8 +1632,8 @@ TRI_vocbase_t* RocksDBEngine::openExistingDatabase(TRI_voc_tick_t id,
           static_cast<RocksDBCollection*>(collection->getPhysical());
       TRI_ASSERT(physical != nullptr);
 
-      physical->deserializeIndexEstimates(counterManager());
-      physical->deserializeKeyGenerator(counterManager());
+      physical->deserializeIndexEstimates(settingsManager());
+      physical->deserializeKeyGenerator(settingsManager());
       LOG_TOPIC(DEBUG, arangodb::Logger::FIXME) << "added document collection '"
                                                 << collection->name() << "'";
     }
