@@ -413,7 +413,7 @@ void RocksDBSettingsManager::readSettings() {
 
         if (slice.hasKey("releasedTick")) {
           _initialReleasedTick =
-              basics::VelocyPackHelper::stringUInt64(slice.get("releasedtick"));
+              basics::VelocyPackHelper::stringUInt64(slice.get("releasedTick"));
           LOG_TOPIC(TRACE, Logger::ENGINES)
               << "using released tick: " << _initialReleasedTick;
           EngineSelectorFeature::ENGINE->releaseTick(_initialReleasedTick);

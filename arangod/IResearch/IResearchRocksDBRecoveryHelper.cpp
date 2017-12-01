@@ -77,13 +77,11 @@ void IResearchRocksDBRecoveryHelper::PutCF(uint32_t column_family_id,
     for (auto link : links) {
       link->insert(&trx, LocalDocumentId(rev), doc,
                    Index::OperationMode::internal);
-      LOG_TOPIC(TRACE, IResearchFeature::IRESEARCH) << "recovery helper inserted: " << doc.toJson();
+      //LOG_TOPIC(TRACE, IResearchFeature::IRESEARCH) << "recovery helper inserted: " << doc.toJson();
     }
     trx.commit();
 
     return;
-  } else {
-    LOG_TOPIC(TRACE, IResearchFeature::IRESEARCH) << "recovery helper: nothing to do for " << column_family_id << " (expected " << _documentCF << ")";
   }
 }
 
@@ -109,7 +107,7 @@ void IResearchRocksDBRecoveryHelper::DeleteCF(uint32_t column_family_id,
         arangodb::AccessMode::Type::WRITE);
     for (auto link : links) {
       link->remove(&trx, LocalDocumentId(rev), Index::OperationMode::internal);
-      LOG_TOPIC(TRACE, IResearchFeature::IRESEARCH) << "recovery helper removed: " << rev;
+      //LOG_TOPIC(TRACE, IResearchFeature::IRESEARCH) << "recovery helper removed: " << rev;
     }
     trx.commit();
 

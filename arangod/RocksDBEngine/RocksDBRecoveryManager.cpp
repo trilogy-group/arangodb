@@ -101,9 +101,7 @@ void RocksDBRecoveryManager::runRecovery() {
   }  // TODO what do we do if not successful?
 }
 
-bool RocksDBRecoveryManager::inRecovery() const {
-  return _inRecovery;
-}
+bool RocksDBRecoveryManager::inRecovery() const { return _inRecovery; }
 
 class WBReader final : public rocksdb::WriteBatch::Handler {
  public:
@@ -309,11 +307,7 @@ class WBReader final : public rocksdb::WriteBatch::Handler {
 
     RocksDBEngine* engine =
         static_cast<RocksDBEngine*>(EngineSelectorFeature::ENGINE);
-    if (engine->recoveryHelpers().size() == 0) {
-      LOG_TOPIC(ERR, Logger::FIXME) << "no recovery helpers...";
-    }
     for (auto helper : engine->recoveryHelpers()) {
-      LOG_TOPIC(ERR, Logger::FIXME) << "passing to helper...";
       helper->PutCF(column_family_id, key, value);
     }
 
@@ -393,9 +387,11 @@ bool RocksDBRecoveryManager::parseRocksWAL() {
   auto handler =
       std::make_unique<WBReader>(engine->settingsManager()->counterSeqs());
 
+  auto minTick = std::min(engine->settingsManager()->earliestSeqNeeded(),
+                          engine->releasedTick());
   std::unique_ptr<rocksdb::TransactionLogIterator> iterator;  // reader();
   rocksdb::Status s = _db->GetUpdatesSince(
-      engine->settingsManager()->earliestSeqNeeded(), &iterator, rocksdb::TransactionLogIterator::ReadOptions(true));
+      minTick, &iterator, rocksdb::TransactionLogIterator::ReadOptions(true));
   if (!s.ok()) {  // TODO do something?
     return false;
   }
