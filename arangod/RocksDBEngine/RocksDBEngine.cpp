@@ -1199,12 +1199,20 @@ void RocksDBEngine::unloadCollection(TRI_vocbase_t* vocbase,
 
 void RocksDBEngine::createView(TRI_vocbase_t* vocbase, TRI_voc_cid_t id,
                                arangodb::LogicalView const*) {
+  rocksdb::WriteBatch batch;
+  rocksdb::WriteOptions wo;  // TODO: check which options would make sense
+  RocksDBLogValue logValue = RocksDBLogValue::ViewCreate(vocbase->id(), id);
+
   RocksDBKey key;
   key.constructView(vocbase->id(), id);
   auto value = RocksDBValue::View(VPackSlice::emptyObjectSlice());
 
-  auto status = rocksutils::globalRocksDBPut(RocksDBColumnFamily::definitions(),
-                                             key.string(), value.string());
+  // Write marker + key into RocksDB inside one batch
+  batch.PutLogData(logValue.slice());
+  batch.Put(RocksDBColumnFamily::definitions(), key.string(), value.string());
+  auto res = _db->Write(wo, &batch);
+  auto status = rocksutils::convertStatus(res);
+
   if (!status.ok()) {
     THROW_ARANGO_EXCEPTION(status.errorNumber());
   }
@@ -1225,8 +1233,7 @@ arangodb::Result RocksDBEngine::persistView(
 }
 
 arangodb::Result RocksDBEngine::dropView(TRI_vocbase_t* vocbase,
-                                         arangodb::LogicalView*) {
-  // nothing to do here
+                                         arangodb::LogicalView* view) {
   return {TRI_ERROR_NO_ERROR};
 }
 

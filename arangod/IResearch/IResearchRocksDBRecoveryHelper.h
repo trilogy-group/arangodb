@@ -25,11 +25,15 @@
 #define ARANGOD_IRESEARCH_ROCKSDB_RECOVERY_HELPER_H 1
 
 #include "RocksDBEngine/RocksDBRecoveryHelper.h"
+#include "VocBase/voc-types.h"
+
+#include <velocypack/velocypack-aliases.h>
 
 struct TRI_vocbase_t;
 
 namespace arangodb {
 
+class Result;
 class DatabaseFeature;
 class LogicalCollection;
 class RocksDBEngine;
@@ -61,6 +65,10 @@ class IResearchRocksDBRecoveryHelper : public RocksDBRecoveryHelper {
   std::pair<TRI_vocbase_t*, LogicalCollection*> lookupDatabaseAndCollection(
       uint64_t objectId) const;
   std::vector<IResearchLink*> lookupLinks(LogicalCollection* coll) const;
+  void dropCollectionFromAllViews(TRI_voc_tick_t dbId,
+                                  TRI_voc_cid_t collectionId);
+  void dropCollectionFromView(TRI_voc_tick_t dbId, TRI_voc_cid_t collectionId,
+                              TRI_voc_cid_t viewId);
 
  private:
   DatabaseFeature* _dbFeature;
