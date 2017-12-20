@@ -244,7 +244,6 @@ DatabaseFeature::DatabaseFeature(ApplicationServer* server)
   startsAfter("CacheManager");
   startsAfter("DatabasePath");
   startsAfter("EngineSelector");
-  startsAfter("InitDatabase");
   startsAfter("Scheduler");
   startsAfter("StorageEngine");
 }

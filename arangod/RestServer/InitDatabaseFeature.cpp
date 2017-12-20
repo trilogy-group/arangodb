@@ -47,7 +47,12 @@ InitDatabaseFeature::InitDatabaseFeature(ApplicationServer* server,
   setOptional(false);
   requiresElevatedPrivileges(false);
   startsAfter("Logger");
+  startsAfter("Database");
   startsAfter("DatabasePath");
+  // the following dependencies ensure the password feature is
+  // started when the storage engine is set up properly and
+  // recovery is completed
+  startsAfter("StorageEngine");
 }
 
 void InitDatabaseFeature::collectOptions(
