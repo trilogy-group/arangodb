@@ -23,6 +23,7 @@
 
 #include "ExecutionEngine.h"
 
+#include "Aql/AqlQueryResultCache.h"
 #include "Aql/BasicBlocks.h"
 #include "Aql/CalculationBlock.h"
 #include "Aql/ClusterBlocks.h"
@@ -58,7 +59,7 @@ using namespace arangodb::aql;
 
 // @brief Local struct to create the
 // information required to build traverser engines
-// on DB servers. 
+// on DB servers.
 struct TraverserEngineShardLists {
   explicit TraverserEngineShardLists(size_t length) {
     // Make sure they all have a fixed size.
@@ -262,7 +263,7 @@ struct Instanciator final : public WalkerWorker<ExecutionNode> {
       }
 
       engine->addBlock(eb.get());
-      
+
       if (!en->hasParent()) {
         // yes. found a new root!
         root = eb.get();
@@ -453,7 +454,7 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
     bool populated;
     // in the original plan that needs this engine
   };
-    
+
   void includedShards(std::unordered_set<std::string> const& allowed) {
     _includedShards = allowed;
   }
@@ -518,7 +519,7 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
   ~CoordinatorInstanciator() {}
 
   /// @brief generatePlanForOneShard
-  void generatePlanForOneShard(VPackBuilder& builder, size_t nr,
+  void generatePlanForOneShard(VPackBuilder& builder, std::string& fakeQueryString, size_t nr,
                                EngineInfo* info, QueryId& connectedId,
                                std::string const& shardId, bool verbose) {
     // copy the relevant fragment of the plan for each shard
@@ -552,6 +553,8 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
     }
     plan.root(previous);
     plan.setVarUsageComputed();
+    fakeQueryString = arangodb::aql::cache::fakeQueryString(&plan);
+    fakeQueryString.append(shardId);
     return plan.root()->toVelocyPack(builder, verbose);
   }
 
@@ -559,14 +562,13 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
   void distributePlanToShard(arangodb::CoordTransactionID& coordTransactionID,
                              EngineInfo* info,
                              QueryId& connectedId, std::string const& shardId,
-                             VPackSlice const& planSlice) {
+                             VPackSlice const& planSlice, std::string const& fakeQueryString) {
     Collection* collection = info->getCollection();
     // create a JSON representation of the plan
     VPackBuilder result;
     result.openObject();
 
     result.add("plan", VPackValue(VPackValueType::Object));
-
     VPackBuilder tmp;
     query->ast()->variables()->toVelocyPack(tmp);
     result.add("initialize", VPackValue(false));
@@ -581,7 +583,7 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
     // mop: this is currently only working for satellites and hardcoded to their structure
     for (auto auxiliaryCollection: info->getAuxiliaryCollections()) {
       TRI_ASSERT(auxiliaryCollection->isSatellite());
-      
+
       // add the collection
       result.openObject();
       auto auxiliaryShards = auxiliaryCollection->shardIds();
@@ -617,7 +619,11 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
     // the toVelocyPack will open & close the "options" object
     query->queryOptions().toVelocyPack(result, true);
 #endif
-    
+
+    if(!fakeQueryString.empty()){
+      result.add("fakeQueryString", VPackValuePair(fakeQueryString.data(), fakeQueryString.size(), VPackValueType::String));
+    }
+
     result.close();
 
     TRI_ASSERT(result.isClosed());
@@ -694,8 +700,8 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
         }
       }
     }
-     
-    size_t numShards = shardIds->size();   
+
+    size_t numShards = shardIds->size();
     //LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "GOT ALL RESPONSES FROM DB SERVERS: " << nrok << "\n";
 
     if (nrok != static_cast<int>(numShards)) {
@@ -729,11 +735,12 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
         // inject the current shard id into the collection
         VPackBuilder b;
         collection->setCurrentShard(shardId);
-        generatePlanForOneShard(b, nr++, info, connectedId, shardId, true);
+        std::string fakeQueryString;
+        generatePlanForOneShard(b, fakeQueryString, nr++, info, connectedId, shardId, true);
 
         distributePlanToShard(coordTransactionID, info,
                               connectedId, shardId,
-                              b.slice());
+                              b.slice(), fakeQueryString);
       }
       collection->resetCurrentShard();
       for (auto const& auxiliaryCollection: auxiliaryCollections) {
@@ -833,17 +840,17 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
                                             "Could not find responsible server for shard " + shardId);
             }
 
-            // use "server:" instead of "shard:" to send query fragments to 
+            // use "server:" instead of "shard:" to send query fragments to
             // the correct servers, even after failover or when a follower drops
-            // the problem with using the previous shard-based approach was that 
+            // the problem with using the previous shard-based approach was that
             // responsibilities for shards may change at runtime.
-            // however, an AQL query must send all requests for the query to the 
+            // however, an AQL query must send all requests for the query to the
             // initially used servers.
-            // if there is a failover while the query is executing, we must still 
-            // send all following requests to the same servers, and not the newly 
+            // if there is a failover while the query is executing, we must still
+            // send all following requests to the same servers, and not the newly
             // responsible servers.
-            // otherwise we potentially would try to get data from a query from 
-            // server B while the query was only instanciated on server A.
+            // otherwise we potentially would try to get data from a query from
+            // server B while the query was only instantiated on server A.
             TRI_ASSERT(!serverList->empty());
             auto& leader = (*serverList)[0];
             ExecutionBlock* r = new RemoteBlock(engine.get(), remoteNode,
@@ -904,7 +911,7 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
     auto clusterInfo = arangodb::ClusterInfo::instance();
     Serv2ColMap mappingServerToCollections;
     size_t length = edges.size();
-    
+
 #ifdef USE_ENTERPRISE
     transaction::Methods* trx = query->trx();
     transaction::Options& trxOps = query->trx()->state()->options();
@@ -933,7 +940,7 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
         pair->second.edgeCollections[i].emplace_back(shard);
       }
     }
-    
+
     std::vector<std::unique_ptr<arangodb::aql::Collection>> const& vertices =
         en->vertexColls();
     if (vertices.empty()) {
@@ -1087,7 +1094,7 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
         engineInfo.close();
       }
       engineInfo.close(); // edges
-      
+
 #ifdef USE_ENTERPRISE
       if (!list.second.inaccessibleShards.empty()) {
         engineInfo.add(VPackValue("inaccessible"));
@@ -1249,8 +1256,8 @@ struct CoordinatorInstanciator : public WalkerWorker<ExecutionNode> {
     // assign the current node to the current engine
     engines[currentEngineId].nodes.emplace_back(en);
   }
-};
-  
+}; // struct CoordinatorInstanciator
+
 /// @brief shutdown, will be called exactly once for the whole query
 int ExecutionEngine::shutdown(int errorCode) {
   int res = TRI_ERROR_NO_ERROR;
@@ -1267,7 +1274,7 @@ int ExecutionEngine::shutdown(int errorCode) {
     }
 
     res = _root->shutdown(errorCode);
- 
+
     // prevent a duplicate shutdown
     _wasShutdown = true;
   }
@@ -1283,7 +1290,7 @@ ExecutionEngine* ExecutionEngine::instantiateFromPlan(
   bool const isCoordinator =
       arangodb::ServerState::instance()->isCoordinator(role);
   bool const isDBServer = arangodb::ServerState::instance()->isDBServer(role);
-    
+
   TRI_ASSERT(queryRegistry != nullptr);
 
   ExecutionEngine* engine = nullptr;

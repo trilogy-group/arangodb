@@ -33,19 +33,23 @@ namespace arangodb {
 namespace aql {
 
 class QueryString {
+ // ATTENTION
+ // The QueryString does not own the data!!
+ // make sure the passed in pointer or string
+ // lives as long as you want to use this class
  public:
   QueryString(QueryString const& other) = default;
   QueryString& operator=(QueryString const& other) = default;
 
-  QueryString(char const* data, size_t length) 
+  QueryString(char const* data, size_t length)
       : _data(data), _length(length), _hash(0), _hashed(false) {}
 
-  explicit QueryString(arangodb::StringRef const& ref) 
+  explicit QueryString(arangodb::StringRef const& ref)
       : QueryString(ref.data(), ref.size()) {}
 
-  explicit QueryString(std::string const& val) 
+  explicit QueryString(std::string const& val)
       : QueryString(val.data(), val.size()) {}
-  
+
   QueryString() : QueryString(nullptr, 0) {}
 
   ~QueryString() = default;
