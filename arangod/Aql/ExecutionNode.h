@@ -161,6 +161,8 @@ class ExecutionNode {
   static ExecutionNode* fromVPackFactory(ExecutionPlan* plan,
                                          arangodb::velocypack::Slice const& slice);
 
+  bool fakeQueryString(std::string&) const;
+
   /// @brief return the node's id
   inline size_t id() const { return _id; }
 
@@ -592,6 +594,8 @@ class ExecutionNode {
   /// @brief set the id, use with care! The purpose is to use a cloned node
   /// together with the original in the same plan.
   void setId(size_t id) { _id = id; }
+  /// create sting representation of this node and its children
+  virtual bool fakeQueryStringThisNode(std::string&) const;
 
   /// @brief factory for sort elements
   static void getSortElements(SortElementVector& elements, ExecutionPlan* plan,
@@ -674,6 +678,7 @@ class SingletonNode : public ExecutionNode {
   SingletonNode(ExecutionPlan* plan, arangodb::velocypack::Slice const& base)
       : ExecutionNode(plan, base) {}
 
+  bool fakeQueryStringThisNode(std::string& outString) const override;
   /// @brief return the type of the node
   NodeType getType() const override final { return SINGLETON; }
 
@@ -717,6 +722,8 @@ class EnumerateCollectionNode : public ExecutionNode, public DocumentProducingNo
 
   EnumerateCollectionNode(ExecutionPlan* plan,
                           arangodb::velocypack::Slice const& base);
+
+  virtual bool fakeQueryStringThisNode(std::string&) const override;
 
   /// @brief return the type of the node
   NodeType getType() const override final { return ENUMERATE_COLLECTION; }
@@ -781,6 +788,8 @@ class EnumerateListNode : public ExecutionNode {
 
   EnumerateListNode(ExecutionPlan*, arangodb::velocypack::Slice const& base);
 
+  virtual bool fakeQueryStringThisNode(std::string&) const override;
+
   /// @brief return the type of the node
   NodeType getType() const override final { return ENUMERATE_LIST; }
 
@@ -842,6 +851,8 @@ class LimitNode : public ExecutionNode {
       : ExecutionNode(plan, id), _offset(0), _limit(limit), _fullCount(false) {}
 
   LimitNode(ExecutionPlan*, arangodb::velocypack::Slice const& base);
+  
+  bool fakeQueryStringThisNode(std::string& outString) const override;
 
   /// @brief return the type of the node
   NodeType getType() const override final { return LIMIT; }
@@ -914,6 +925,8 @@ class CalculationNode : public ExecutionNode {
   CalculationNode(ExecutionPlan*, arangodb::velocypack::Slice const& base);
 
   ~CalculationNode() { delete _expression; }
+
+  bool fakeQueryStringThisNode(std::string& outString) const override;
 
   /// @brief return the type of the node
   NodeType getType() const override final { return CALCULATION; }
@@ -1019,6 +1032,7 @@ class SubqueryNode : public ExecutionNode {
     TRI_ASSERT(_outVariable != nullptr);
   }
 
+  bool fakeQueryStringThisNode(std::string& outString) const override;
   /// @brief return the type of the node
   NodeType getType() const override final { return SUBQUERY; }
 
@@ -1096,6 +1110,8 @@ class FilterNode : public ExecutionNode {
   }
 
   FilterNode(ExecutionPlan*, arangodb::velocypack::Slice const& base);
+
+  bool fakeQueryStringThisNode(std::string&) const override;
 
   /// @brief return the type of the node
   NodeType getType() const override final { return FILTER; }
@@ -1196,6 +1212,8 @@ class ReturnNode : public ExecutionNode {
 
   ReturnNode(ExecutionPlan*, arangodb::velocypack::Slice const& base);
 
+  bool  fakeQueryStringThisNode(std::string& outString) const override;
+
   /// @brief return the type of the node
   NodeType getType() const override final { return RETURN; }
 
@@ -1248,6 +1266,7 @@ class NoResultsNode : public ExecutionNode {
                           bool) const override final;
 
 
+  bool fakeQueryStringThisNode(std::string& outString) const override;
   /// @brief clone ExecutionNode recursively
   ExecutionNode* clone(ExecutionPlan* plan, bool withDependencies,
                        bool withProperties) const override final {

@@ -103,7 +103,7 @@ void RestBaseHandler::generateResult(
 void RestBaseHandler::generateOk(rest::ResponseCode code,
                                  VPackSlice const& payload) {
   resetResponse(code);
-  
+
   try {
     VPackBuffer<uint8_t> buffer;
     VPackBuilder tmp(buffer);
@@ -112,7 +112,7 @@ void RestBaseHandler::generateOk(rest::ResponseCode code,
     tmp.add("code", VPackValue(static_cast<int>(code)));
     tmp.add("result", payload);
     tmp.close();
-    
+
     VPackOptions options(VPackOptions::Defaults);
     options.escapeUnicode = true;
     writeResult(std::move(buffer), options);
@@ -124,19 +124,43 @@ void RestBaseHandler::generateOk(rest::ResponseCode code,
 void RestBaseHandler::generateOk(rest::ResponseCode code,
                                  VPackBuilder const& payload) {
   resetResponse(code);
-  
+
   try {
     VPackBuilder tmp;
     tmp.add(VPackValue(VPackValueType::Object));
     tmp.add("error", VPackValue(false));
     tmp.add("code", VPackValue(static_cast<int>(code)));
     tmp.close();
-    
+
     tmp = VPackCollection::merge(tmp.slice(), payload.slice(), false);
-    
+
     VPackOptions options(VPackOptions::Defaults);
     options.escapeUnicode = true;
     writeResult(tmp.slice(), options);
+  } catch (...) {
+    // Building the error response failed
+  }
+}
+
+
+
+void RestBaseHandler::generateSuccess(rest::ResponseCode code, VPackSlice const& payload, bool noResult) {
+  resetResponse(code);
+
+  VPackBuffer<uint8_t> buffer;
+  VPackBuilder builder(buffer);
+  try {
+    builder.add(VPackValue(VPackValueType::Object));
+    builder.add("error", VPackValue(false));
+    builder.add("code", VPackValue(static_cast<int>(code)));
+    if (!noResult) {
+      builder.add("result", payload);
+    }
+    builder.close();
+
+    VPackOptions options(VPackOptions::Defaults);
+    options.escapeUnicode = true;
+    writeResult(std::move(buffer), options);
   } catch (...) {
     // Building the error response failed
   }

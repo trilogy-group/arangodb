@@ -51,6 +51,14 @@ using namespace arangodb::aql;
 
 static bool const Optional = true;
 
+static std::string getStringValue(Variable const* var){
+  if(var->value){
+    return static_cast<AstNode*>(var->value)->getString();
+  } else {
+    return std::string("");
+  }
+}
+
 /// @brief maximum register id that can be assigned.
 /// this is used for assertions
 RegisterId const ExecutionNode::MaxRegisterId = 1000;
@@ -84,6 +92,27 @@ std::unordered_map<int, std::string const> const ExecutionNode::TypeNames{
     {static_cast<int>(ENUMERATE_IRESEARCH_VIEW), "EnumerateViewNode"}
 #endif
 };
+
+
+bool ExecutionNode::fakeQueryString(std::string& outString) const {
+// returns fake querystring that is used to create a hash key
+// for queries on DBServers in cluster-mode
+  bool rv = fakeQueryStringThisNode(outString);
+  if (!rv) { return false; }
+
+  else {
+    for(auto* node : this->getDependencies()){
+      rv = node->fakeQueryString(outString);
+      if(!rv){ return false; }
+    }
+  }
+  return rv;
+}
+
+// protected - virtual 
+bool ExecutionNode::fakeQueryStringThisNode(std::string&) const {
+  return false;
+}
 
 /// @brief returns the type name of the node
 std::string const& ExecutionNode::getTypeString() const {
@@ -1168,6 +1197,11 @@ double SingletonNode::estimateCost(size_t& nrItems) const {
   return 1.0;
 }
 
+bool SingletonNode::fakeQueryStringThisNode(std::string& outString) const {
+  outString.append("S",1);
+  return true;
+}
+
 EnumerateCollectionNode::EnumerateCollectionNode(
     ExecutionPlan* plan, arangodb::velocypack::Slice const& base)
     : ExecutionNode(plan, base),
@@ -1185,6 +1219,15 @@ EnumerateCollectionNode::EnumerateCollectionNode(
     msg.append("' not found");
     THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, msg);
   }
+}
+
+bool EnumerateCollectionNode::fakeQueryStringThisNode(std::string& outString) const {
+  if(_random) { return false; }
+  outString.append("EC",2);
+  outString.append(_collection->name);
+  outString.append(_outVariable->name); // is this ok?
+  //vocbase? do we alrady have the db context outside?!
+  return true;
 }
 
 /// @brief toVelocyPack, for EnumerateCollectionNode
@@ -1247,6 +1290,14 @@ EnumerateListNode::EnumerateListNode(ExecutionPlan* plan,
     : ExecutionNode(plan, base),
       _inVariable(Variable::varFromVPack(plan->getAst(), base, "inVariable")),
       _outVariable(Variable::varFromVPack(plan->getAst(), base, "outVariable")) {}
+
+bool EnumerateListNode::fakeQueryStringThisNode(std::string& outString) const {
+  outString.append("EL",2);
+  outString.append(_outVariable->name);
+  outString.append(_inVariable->name);
+  outString.append(getStringValue(_inVariable));
+  return true;
+}
 
 /// @brief toVelocyPack, for EnumerateListNode
 void EnumerateListNode::toVelocyPackHelper(VPackBuilder& nodes,
@@ -1341,6 +1392,12 @@ LimitNode::LimitNode(ExecutionPlan* plan, arangodb::velocypack::Slice const& bas
       _limit(base.get("limit").getNumericValue<decltype(_limit)>()),
       _fullCount(base.get("fullCount").getBoolean()) {}
 
+bool LimitNode::fakeQueryStringThisNode(std::string& outString) const {
+  outString.append("L",1);
+  outString.append(std::to_string(_offset) + std::to_string(_limit) + std::to_string(_fullCount));
+  return true;
+}
+
 // @brief toVelocyPack, for LimitNode
 void LimitNode::toVelocyPackHelper(VPackBuilder& nodes, bool verbose) const {
   ExecutionNode::toVelocyPackHelperGeneric(nodes, verbose);  // call base class method
@@ -1370,6 +1427,15 @@ CalculationNode::CalculationNode(ExecutionPlan* plan,
       _outVariable(Variable::varFromVPack(plan->getAst(), base, "outVariable")),
       _expression(new Expression(plan, plan->getAst(), base)),
       _canRemoveIfThrows(false) {}
+
+bool CalculationNode::fakeQueryStringThisNode(std::string& outString) const {
+  outString.append("CN",2);
+  outString.append(_outVariable->name);
+  arangodb::basics::StringBuffer buff(true);
+  _expression->stringify(&buff,true /*quote strings*/);
+  outString.append(buff.c_str(),buff.length());
+  return true;
+}
 
 /// @brief toVelocyPack, for CalculationNode
 void CalculationNode::toVelocyPackHelper(VPackBuilder& nodes,
@@ -1431,6 +1497,11 @@ SubqueryNode::SubqueryNode(ExecutionPlan* plan,
       _subquery(nullptr),
       _outVariable(Variable::varFromVPack(plan->getAst(), base, "outVariable")) {}
 
+bool SubqueryNode::fakeQueryStringThisNode(std::string& outString) const {
+  return false;
+  //outString.append("SU",2);
+  //return _subquery->fakeQueryString(outString);
+}
 /// @brief toVelocyPack, for SubqueryNode
 void SubqueryNode::toVelocyPackHelper(VPackBuilder& nodes, bool verbose) const {
   ExecutionNode::toVelocyPackHelperGeneric(nodes,
@@ -1663,6 +1734,13 @@ void FilterNode::toVelocyPackHelper(VPackBuilder& nodes, bool verbose) const {
   nodes.close();
 }
 
+bool FilterNode::fakeQueryStringThisNode(std::string& outString) const {
+  outString.append("F",1);
+  outString.append(_inVariable->name);
+  outString.append(getStringValue(_inVariable));
+  return true;
+}
+
 ExecutionNode* FilterNode::clone(ExecutionPlan* plan, bool withDependencies,
                                  bool withProperties) const {
   auto inVariable = _inVariable;
@@ -1696,6 +1774,12 @@ double FilterNode::estimateCost(size_t& nrItems) const {
 ReturnNode::ReturnNode(ExecutionPlan* plan, arangodb::velocypack::Slice const& base)
     : ExecutionNode(plan, base),
       _inVariable(Variable::varFromVPack(plan->getAst(), base, "inVariable")) {}
+
+bool ReturnNode::fakeQueryStringThisNode(std::string& outString) const {
+  outString.append("R",1);
+  outString.append(_inVariable->name);
+  return true;
+}
 
 /// @brief toVelocyPack, for ReturnNode
 void ReturnNode::toVelocyPackHelper(VPackBuilder& nodes, bool verbose) const {
@@ -1740,6 +1824,11 @@ void NoResultsNode::toVelocyPackHelper(VPackBuilder& nodes,
 
   //And close it
   nodes.close();
+}
+
+bool NoResultsNode::fakeQueryStringThisNode(std::string& outString) const {
+  outString.append("N",1);
+  return true;
 }
 
 /// @brief estimateCost, the cost of a NoResults is nearly 0

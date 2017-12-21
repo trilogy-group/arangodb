@@ -21,26 +21,28 @@
 /// @author Max Neunhoeffer
 ////////////////////////////////////////////////////////////////////////////////
 
-#include "RestAqlHandler.h"
 #include "Aql/AqlItemBlock.h"
 #include "Aql/ClusterBlocks.h"
 #include "Aql/ExecutionBlock.h"
 #include "Aql/ExecutionEngine.h"
 #include "Aql/Query.h"
+#include "Aql/QueryCache.h"
 #include "Basics/Exceptions.h"
 #include "Basics/StaticStrings.h"
 #include "Basics/StringUtils.h"
 #include "Basics/VPackStringBufferAdapter.h"
 #include "Basics/VelocyPackHelper.h"
 #include "Basics/tri-strings.h"
+#include "Cluster/ServerState.h"
 #include "Logger/Logger.h"
 #include "Rest/HttpRequest.h"
 #include "Rest/HttpResponse.h"
+#include "RestAqlHandler.h"
 #include "Scheduler/JobGuard.h"
 #include "Scheduler/JobQueue.h"
 #include "Scheduler/SchedulerFeature.h"
-#include "Transaction/Methods.h"
 #include "Transaction/Context.h"
+#include "Transaction/Methods.h"
 #include "VocBase/ticks.h"
 
 #include <velocypack/Dumper.h>
@@ -51,6 +53,13 @@ using namespace arangodb::rest;
 using namespace arangodb::aql;
 
 using VelocyPackHelper = arangodb::basics::VelocyPackHelper;
+
+static bool isDBServerInCluster(){
+  auto ss = ServerState::instance();
+  static bool rv = ss->isRunningInCluster() && ss->ServerState::isDBServer();
+  return rv;
+};
+
 
 RestAqlHandler::RestAqlHandler(GeneralRequest* request,
                                GeneralResponse* response,
@@ -88,6 +97,14 @@ void RestAqlHandler::createQueryFromVelocyPack() {
     return;
   }
 
+  uint64_t cacheId = 0;
+  VPackSlice fakeQuerySlice = querySlice.get("fakeQueryString");
+  if (!fakeQuerySlice.isNone() && fakeQuerySlice.isString()) {
+    cacheId = QueryString(fakeQuerySlice.copyString()).hash();
+    //LOG_DEVEL << cacheId << " handler - instantiate FAKEQUERYSTRING: '" << fakeQuerySlice.copyString() << "'";
+  }
+
+
   auto options = std::make_shared<VPackBuilder>(
       VPackBuilder::clone(querySlice.get("options")));
 
@@ -96,18 +113,34 @@ void RestAqlHandler::createQueryFromVelocyPack() {
 
   auto planBuilder = std::make_shared<VPackBuilder>(VPackBuilder::clone(plan));
   auto query = std::make_unique<Query>(false, _vocbase, planBuilder, options,
-                                      (part == "main" ? PART_MAIN : PART_DEPENDENT));
-  
-  try {
-    query->prepare(_queryRegistry, 0);
-  } catch (std::exception const& ex) {
-    LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the query: " << ex.what();
-    generateError(rest::ResponseCode::BAD, TRI_ERROR_QUERY_BAD_JSON_PLAN, ex.what());
-    return;
-  } catch (...) {
-    LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the query";
-    generateError(rest::ResponseCode::BAD, TRI_ERROR_QUERY_BAD_JSON_PLAN);
-    return;
+                                      (part == "main" ? PART_MAIN : PART_DEPENDENT),
+                                      cacheId);
+
+
+
+  bool cacheEntryFound = false;
+  bool doCache = true; //= queryCache->mode() != QueryCacheMode::CACHE_ALWAYS_OFF; //TODO add correct behaviour for on demand
+
+  if (doCache && isDBServerInCluster() && cacheId){ // enable caching only for DbServers in Cluster
+    Result rv;
+    //LOG_DEVEL_IF(cacheId) << cacheId << " handler instantiate - find query in cache";
+    rv = query->cacheUse(cacheId);
+    THROW_ARANGO_EXCEPTION_IF_FAIL(rv);
+    cacheEntryFound = query->cacheEntryAvailable();
+  }
+
+  if(true || !cacheEntryFound){
+    try {
+      query->prepare(_queryRegistry, 0);
+    } catch (std::exception const& ex) {
+      LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the query (prepare): " << ex.what();
+      generateError(rest::ResponseCode::BAD, TRI_ERROR_QUERY_BAD_JSON_PLAN, ex.what());
+      return;
+    } catch (...) {
+      LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the query (prepare)";
+      generateError(rest::ResponseCode::BAD, TRI_ERROR_QUERY_BAD_JSON_PLAN);
+      return;
+    }
   }
 
   // Now the query is ready to go, store it in the registry and return:
@@ -121,9 +154,15 @@ void RestAqlHandler::createQueryFromVelocyPack() {
 
   _qId = TRI_NewTickServer();
   auto transactionContext = query->trx()->transactionContext().get();
+  // CREATE CHACE ENTRY HERE WITH query->cacheId()
 
   try {
     _queryRegistry->insert(_qId, query.get(), ttl);
+    if (doCache && !cacheEntryFound && isDBServerInCluster() && query->cacheId()){ // enable caching only for DbServers in Cluster
+      TRI_ASSERT(cacheId == query->cacheId());
+      //LOG_DEVEL << cacheId << " starting new cache - isDBServer: " << isDBServerInCluster;
+      query->resultStart(/*enable cache checking*/ true); //open cache entry
+    }
     query.release();
   } catch (...) {
     LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "could not keep query in registry";
@@ -178,7 +217,7 @@ void RestAqlHandler::parseQuery() {
                 std::shared_ptr<VPackBuilder>(), nullptr, PART_MAIN);
   QueryResult res = query->parse();
   if (res.code != TRI_ERROR_NO_ERROR) {
-    LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the Query: " << res.details;
+    LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the Query (parse): " << res.details;
     generateError(rest::ResponseCode::BAD, res.code, res.details);
     return;
   }
@@ -253,7 +292,7 @@ void RestAqlHandler::explainQuery() {
                               bindVars, options, PART_MAIN);
   QueryResult res = query->explain();
   if (res.code != TRI_ERROR_NO_ERROR) {
-    LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the Query: " << res.details;
+    LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "failed to instantiate the Query (explain): " << res.details;
     generateError(rest::ResponseCode::BAD, res.code, res.details);
     return;
   }
@@ -324,7 +363,7 @@ void RestAqlHandler::createQueryFromString() {
   auto query = std::make_unique<Query>(false, _vocbase, QueryString(queryString),
                          bindVars, options,
                          (part == "main" ? PART_MAIN : PART_DEPENDENT));
-  
+
   try {
     query->prepare(_queryRegistry, 0);
   } catch (std::exception const& ex) {
@@ -623,6 +662,7 @@ RestStatus RestAqlHandler::execute() {
         generateError(rest::ResponseCode::NOT_FOUND,
                       TRI_ERROR_HTTP_NOT_FOUND);
       } else {
+        // path that is used for getSome / skipSome
         useQuery(suffixes[0], suffixes[1]);
       }
       break;
@@ -692,6 +732,8 @@ bool RestAqlHandler::findQuery(std::string const& idString, Query*& query) {
     return true;
   }
 
+  //LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "### ### RestAqlHander::findQuery - by ID: " << idString
+  //                                        << " hash " << query->cacheId();
   TRI_ASSERT(_qId > 0);
 
   return false;
@@ -700,6 +742,7 @@ bool RestAqlHandler::findQuery(std::string const& idString, Query*& query) {
 // handle for useQuery
 void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
                                     VPackSlice const querySlice) {
+
   bool found;
   std::string shardId;
   std::string const& shardIdCharP = _request->header("shard-id", found);
@@ -738,146 +781,255 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
 
         answerBuilder.add("error", VPackValue(res != TRI_ERROR_NO_ERROR));
         answerBuilder.add("code", VPackValue(res));
+
       } else if (operation == "getSome") {
-        auto atLeast =
-            VelocyPackHelper::getNumericValue<size_t>(querySlice, "atLeast", 1);
-        auto atMost = VelocyPackHelper::getNumericValue<size_t>(
-            querySlice, "atMost", ExecutionBlock::DefaultBatchSize());
-        std::unique_ptr<AqlItemBlock> items;
-        if (shardId.empty()) {
-          items.reset(query->engine()->getSome(atLeast, atMost));
-        } else {
-          auto block = static_cast<BlockWithClients*>(query->engine()->root());
-          if (block->getPlanNode()->getType() != ExecutionNode::SCATTER &&
-              block->getPlanNode()->getType() != ExecutionNode::DISTRIBUTE) {
-            THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "unexpected node type");
+        auto atLeast = VelocyPackHelper::getNumericValue<size_t>(querySlice, "atLeast", 1);
+        auto atMost = VelocyPackHelper::getNumericValue<size_t>(querySlice, "atMost", ExecutionBlock::DefaultBatchSize());
+
+        if(query->cacheEntryAvailable()){
+          // cache available
+          LOG_DEVEL << query->cacheId() << " handler - getsome (cache) - atLeast: " << atLeast << " atMost: " << atMost;
+          Result rv = query->cacheGetOrSkipSomePart(answerBuilder, false /*skip*/, atLeast, atMost);
+          if(rv.fail()){
+              LOG_DEVEL << query->cacheId() << " handler - getsome (cache) - failed!!!!";
+              generateError(rv);
+              return;
           }
-          items.reset(block->getSomeForShard(atLeast, atMost, shardId));
-        }
-        if (items.get() == nullptr) {
-          answerBuilder.add("exhausted", VPackValue(true));
-          answerBuilder.add("error", VPackValue(false));
+          LOG_DEVEL << query->cacheId() << " handler - getsome - QUERY DELIVERED FORM CACHE" ;
+
         } else {
-          try {
-            items->toVelocyPack(query->trx(), answerBuilder);
-          } catch (...) {
-            generateError(rest::ResponseCode::SERVER_ERROR,
-                          TRI_ERROR_HTTP_SERVER_ERROR,
-                          "cannot transform AqlItemBlock to VelocyPack");
-            return;
+          // no cache available
+          std::unique_ptr<AqlItemBlock> items;
+          if (shardId.empty()) {
+            items.reset(query->engine()->getSome(atLeast, atMost));
+          } else {
+            //LOG_DEVEL << query->cacheId() << " handler - getsome - fill (allowed on coord)" ;
+            auto block = static_cast<BlockWithClients*>(query->engine()->root());
+            if (block->getPlanNode()->getType() != ExecutionNode::SCATTER &&
+                block->getPlanNode()->getType() != ExecutionNode::DISTRIBUTE) {
+              THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "unexpected node type");
+            }
+            items.reset(block->getSomeForShard(atLeast, atMost, shardId));
           }
-        }
+
+          //LOG_DEVEL << query->cacheId()  << " handler - getsome - fill - got items itempsptr: " << items.get();
+
+          if (items.get() == nullptr) {
+            answerBuilder.add("exhausted", VPackValue(true));
+            answerBuilder.add("error", VPackValue(false));
+          } else {
+            try {
+              items->toVelocyPack(query->trx(), answerBuilder);
+              if(query->cacheBuildingResult()){
+                //LOG_DEVEL << query->cacheId() << " adding items to cache ";
+                Result rv = query->resultAddPart(*items);
+                if(rv.fail()){
+                  query->resultCancel();
+                  LOG_DEVEL << "FAILED TO ADD RESULT TO CACHE " << rv.errorMessage();
+                }
+              }
+            } catch (std::exception const& e) {
+              query->resultCancel();
+              LOG_DEVEL << e.what();
+              generateError(rest::ResponseCode::SERVER_ERROR,
+                            TRI_ERROR_HTTP_SERVER_ERROR,
+                            std::string("cannot transform AqlItemBlock to VelocyPack") + e.what());
+              return;
+            } catch (...) {
+              query->resultCancel();
+              generateError(rest::ResponseCode::SERVER_ERROR,
+                            TRI_ERROR_HTTP_SERVER_ERROR,
+                            "cannot transform AqlItemBlock to VelocyPack");
+              return;
+            }
+          }
+        } // [no] cache available
       } else if (operation == "skipSome") {
         auto atLeast =
             VelocyPackHelper::getNumericValue<size_t>(querySlice, "atLeast", 1);
         auto atMost = VelocyPackHelper::getNumericValue<size_t>(
             querySlice, "atMost", ExecutionBlock::DefaultBatchSize());
-        size_t skipped;
-        try {
-          if (shardId.empty()) {
-            skipped = query->engine()->skipSome(atLeast, atMost);
-          } else {
-            auto block =
-                static_cast<BlockWithClients*>(query->engine()->root());
-            if (block->getPlanNode()->getType() != ExecutionNode::SCATTER &&
-                block->getPlanNode()->getType() != ExecutionNode::DISTRIBUTE) {
-              THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "unexpected node type");
+        size_t skipped = 0;
+        if(query->cacheEntryAvailable()){
+          // cache available
+          LOG_DEVEL << operation << "(cache) - atLeast: " << atLeast << " atMost: " << atMost;
+          Result rv = query->cacheGetOrSkipSomePart(answerBuilder, true /*skip*/, atLeast, atMost);
+          THROW_ARANGO_EXCEPTION_IF_FAIL(rv);
+        } else {
+          try {
+            if (shardId.empty()) {
+              //dbserver
+              LOG_DEVEL << "DBSERVER";
+              if(query->cacheBuildingResult()){
+                std::unique_ptr<AqlItemBlock> items;
+                items.reset(query->engine()->getSome(atLeast, atMost));
+                if (items.get()){
+                  skipped = items->size();
+                  Result rv = query->resultAddPart(*items);
+                  LOG_DEVEL_IF(rv.fail()) << " ##### DBSERVER ####### "<< rv.errorMessage();
+                  THROW_ARANGO_EXCEPTION_IF_FAIL(rv);
+                }
+              } else {
+                skipped = query->engine()->skipSome(atLeast, atMost);
+              }
+            } else {
+              // coordinator
+              auto block =
+                  static_cast<BlockWithClients*>(query->engine()->root());
+              if (block->getPlanNode()->getType() != ExecutionNode::SCATTER &&
+                  block->getPlanNode()->getType() != ExecutionNode::DISTRIBUTE) {
+                THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "unexpected node type");
+              }
+              skipped = block->skipSomeForShard(atLeast, atMost, shardId);
+
+
             }
-            skipped = block->skipSomeForShard(atLeast, atMost, shardId);
+          } catch (...) {
+            generateError(rest::ResponseCode::SERVER_ERROR,
+                          TRI_ERROR_HTTP_SERVER_ERROR,
+                          "skipSome lead to an exception");
+            return;
           }
-        } catch (std::exception const& ex) {
-          generateError(rest::ResponseCode::SERVER_ERROR,
-                        TRI_ERROR_HTTP_SERVER_ERROR,
-                        std::string("skipSome lead to an exception: ") + ex.what());
-          return;
-        } catch (...) {
-          generateError(rest::ResponseCode::SERVER_ERROR,
-                        TRI_ERROR_HTTP_SERVER_ERROR,
-                        "skipSome lead to an exception");
-          return;
-        }
-        answerBuilder.add("skipped", VPackValue(static_cast<double>(skipped)));
-        answerBuilder.add("error", VPackValue(false));
-      } else if (operation == "skip") {
-        auto number =
-            VelocyPackHelper::getNumericValue<size_t>(querySlice, "number", 1);
-        try {
-          bool exhausted;
-          if (shardId.empty()) {
-            size_t numActuallySkipped = 0;
-            exhausted = query->engine()->skip(number, numActuallySkipped);
-          } else {
-            auto block =
-                static_cast<BlockWithClients*>(query->engine()->root());
-            if (block->getPlanNode()->getType() != ExecutionNode::SCATTER &&
-                block->getPlanNode()->getType() != ExecutionNode::DISTRIBUTE) {
-              THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "unexpected node type");
-            }
-            exhausted = block->skipForShard(number, shardId);
-          }
-          answerBuilder.add("exhausted", VPackValue(exhausted));
+          answerBuilder.add("skipped", VPackValue(static_cast<double>(skipped)));
           answerBuilder.add("error", VPackValue(false));
-        } catch (std::exception const& ex) {
-          generateError(rest::ResponseCode::SERVER_ERROR,
+        } // not cached
+      } else if (operation == "skip") {
+        auto number = VelocyPackHelper::getNumericValue<size_t>(querySlice, "number", 1);
+        bool exhausted;
+        if(query->cacheEntryAvailable()){
+          // cache available
+          Result rv = query->cacheGetOrSkipSomePart(answerBuilder, true /*skip*/, number, number);
+          exhausted = query->cacheExhausted();
+          THROW_ARANGO_EXCEPTION_IF_FAIL(rv);
+        } else {
+          try {
+            if (shardId.empty()) {
+              size_t numActuallySkipped = 0;
+              exhausted = query->engine()->skip(number, numActuallySkipped);
+            } else {
+              auto block =
+                  static_cast<BlockWithClients*>(query->engine()->root());
+              if (block->getPlanNode()->getType() != ExecutionNode::SCATTER &&
+                  block->getPlanNode()->getType() != ExecutionNode::DISTRIBUTE) {
+                THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "unexpected node type");
+              }
+              exhausted = block->skipForShard(number, shardId);
+            }
+          } catch (std::exception const& ex) {
+            generateError(rest::ResponseCode::SERVER_ERROR,
                         TRI_ERROR_HTTP_SERVER_ERROR,
                         std::string("skip lead to an exception: ") + ex.what());
-          return;
-        } catch (...) {
-          generateError(rest::ResponseCode::SERVER_ERROR,
-                        TRI_ERROR_HTTP_SERVER_ERROR,
-                        "skip lead to an exception");
-          return;
-        }
-      } else if (operation == "initialize") {
-        int res;
-        try {
-          res = query->engine()->initialize();
-        } catch (arangodb::basics::Exception const& ex) {
-          generateError(rest::ResponseCode::SERVER_ERROR, ex.code(), std::string("initialize lead to an exception: ") + ex.what());
-          return;
-        } catch (std::exception const& ex) {
-          generateError(rest::ResponseCode::SERVER_ERROR, TRI_ERROR_HTTP_SERVER_ERROR, std::string("initialize lead to an exception: ") + ex.what());
-          return;
-        } catch (...) {
-          generateError(rest::ResponseCode::SERVER_ERROR,
-                        TRI_ERROR_HTTP_SERVER_ERROR,
-                        "initialize lead to an exception");
-          return;
-        }
-        answerBuilder.add("error", VPackValue(res != TRI_ERROR_NO_ERROR));
-        answerBuilder.add("code", VPackValue(static_cast<double>(res)));
-      } else if (operation == "initializeCursor") {
-        auto pos =
-            VelocyPackHelper::getNumericValue<size_t>(querySlice, "pos", 0);
-        std::unique_ptr<AqlItemBlock> items;
-        int res;
-        try {
-          if (VelocyPackHelper::getBooleanValue(querySlice, "exhausted",
-                                                true)) {
-            res = query->engine()->initializeCursor(nullptr, 0);
-          } else {
-            items.reset(new AqlItemBlock(query->resourceMonitor(), querySlice.get("items")));
-            res = query->engine()->initializeCursor(items.get(), pos);
+            return;
+          } catch (...) {
+            generateError(rest::ResponseCode::SERVER_ERROR,
+                          TRI_ERROR_HTTP_SERVER_ERROR,
+                          "skip lead to an exception");
+            return;
           }
-        } catch (arangodb::basics::Exception const& ex) {
-          generateError(rest::ResponseCode::SERVER_ERROR, ex.code(), std::string("initializeCursor lead to an exception: ") + ex.what());
-          return;
-        } catch (std::exception const& ex) {
-          generateError(rest::ResponseCode::SERVER_ERROR, TRI_ERROR_HTTP_SERVER_ERROR, std::string("initializeCursor lead to an exception: ") + ex.what());
-          return;
-        } catch (...) {
-          generateError(rest::ResponseCode::SERVER_ERROR,
-                        TRI_ERROR_HTTP_SERVER_ERROR,
-                        "initializeCursor lead to an exception");
-          return;
         }
-        answerBuilder.add("error", VPackValue(res != TRI_ERROR_NO_ERROR));
-        answerBuilder.add("code", VPackValue(static_cast<double>(res)));
+        answerBuilder.add("exhausted", VPackValue(exhausted));
+        answerBuilder.add("error", VPackValue(false));
+      } else if (operation == "initialize") {
+        if(query->cacheEntryAvailable()){
+          answerBuilder.add("error", VPackValue(false));
+          answerBuilder.add("code", VPackValue(0));
+          LOG_DEVEL << "RESET CACHE CURSOR";
+          query->cacheCursorReset();
+        } else {
+          int res;
+          try {
+            res = query->engine()->initialize();
+          } catch (arangodb::basics::Exception const& ex) {
+            generateError(rest::ResponseCode::SERVER_ERROR, ex.code(), "initialize lead to an exception: " + ex.message());
+            return;
+          } catch (...) {
+            generateError(rest::ResponseCode::SERVER_ERROR,
+                          TRI_ERROR_HTTP_SERVER_ERROR,
+                          "initialize lead to an exception");
+            return;
+          }
+          answerBuilder.add("error", VPackValue(res != TRI_ERROR_NO_ERROR));
+          answerBuilder.add("code", VPackValue(res));
+        }
+      } else if (operation == "initializeCursor") {
+        auto pos = VelocyPackHelper::getNumericValue<size_t>(querySlice, "pos", 0);
+        if(query->cacheEntryAvailable()){
+          Result rv;
+          if (VelocyPackHelper::getBooleanValue(querySlice, "exhausted", true)) {
+            rv = query->cacheCursorReset();
+          } else {
+            LOG_DEVEL << "THIS MAY NOT HAPPEN";
+            LOG_DEVEL << " #### position pos; " << pos;
+            TRI_ASSERT(false);
+            rv = query->cacheCursorReset();
+          }
+          answerBuilder.add("error", VPackValue(rv.fail()));
+          answerBuilder.add("code", VPackValue(rv.errorNumber()));
+          answerBuilder.add("message", VPackValue(rv.errorMessage()));
+        } else {
+          std::unique_ptr<AqlItemBlock> items;
+          int res;
+          try {
+            if (VelocyPackHelper::getBooleanValue(querySlice, "exhausted",
+                                                  true)) {
+              res = query->engine()->initializeCursor(nullptr, 0);
+            } else {
+              items.reset(new AqlItemBlock(query->resourceMonitor(), querySlice.get("items")));
+              if(items || pos){
+                //LOG_DEVEL << "dealing with subquery";
+                query->resultCancel(); //we need to cancel as we are dealing with something that has a subquery
+              }
+              res = query->engine()->initializeCursor(items.get(), pos);
+            }
+          } catch (arangodb::basics::Exception const& ex) {
+            generateError(rest::ResponseCode::SERVER_ERROR, ex.code(), "initializeCursor lead to an exception: " + ex.message());
+            return;
+          } catch (...) {
+            generateError(rest::ResponseCode::SERVER_ERROR,
+                          TRI_ERROR_HTTP_SERVER_ERROR,
+                          "initializeCursor lead to an exception");
+            return;
+          }
+          answerBuilder.add("error", VPackValue(res != TRI_ERROR_NO_ERROR));
+          answerBuilder.add("code", VPackValue(res));
+        }
       } else if (operation == "shutdown") {
         int res = TRI_ERROR_INTERNAL;
         int errorCode = VelocyPackHelper::getNumericValue<int>(
             querySlice, "code", TRI_ERROR_INTERNAL);
         try {
+
+          if(query->cacheBuildingResult()){
+            LOG_DEVEL << "#####PRIMARY####### ";
+            
+            TRI_ASSERT(query->cacheId());
+
+            std::unique_ptr<AqlItemBlock> items;
+            try {
+              TRI_ASSERT(query);
+              TRI_ASSERT(query->engine());
+              if(query->engine()->hasMore()){
+                LOG_DEVEL << "has more!";
+                auto n = query->engine()->remaining();
+                LOG_DEVEL << "adding " << n << "items in shutdown";
+                items.reset(query->engine()->getSome(n,n));
+              }
+            } catch (std::exception& e){
+              LOG_DEVEL << "####failed to get remianing######## "<< e.what();
+            } catch (...) {
+              LOG_DEVEL << "#####failed to get remaining####### unknown error";
+            }
+
+            if (items.get()){
+              Result rv = query->resultAddPart(*items);
+              LOG_DEVEL_IF(rv.fail()) << " ######failed to add result ###### "<< rv.errorMessage();
+              THROW_ARANGO_EXCEPTION_IF_FAIL(rv);
+            }
+            
+            //LOG_DEVEL << query->cacheId() << " handler - shutdown store";
+            query->cacheStore(query->cacheId(), /*check cache invalidation*/ true);
+          }
+
           res = query->engine()->shutdown(
               errorCode);  // pass errorCode to shutdown
 
@@ -913,7 +1065,12 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
                       TRI_ERROR_HTTP_NOT_FOUND);
         return;
       }
-    }
+    } // answerBuilder guard scope
+    bool pred = false;
+    bool borders = pred && true;
+    LOG_DEVEL_IF( borders ) << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
+    LOG_DEVEL_IF( pred ) << operation  << ": " << answerBuilder.slice().toJson();
+    LOG_DEVEL_IF( borders ) << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
     sendResponse(rest::ResponseCode::OK, answerBuilder.slice(),
                  transactionContext.get());
   } catch (arangodb::basics::Exception const& ex) {

@@ -38,6 +38,7 @@
 #include "Agency/State.h"
 #include "ApplicationFeatures/ApplicationServer.h"
 #include "ApplicationFeatures/HttpEndpointProvider.h"
+#include "Aql/AqlQueryResultCache.h"
 #include "Aql/Query.h"
 #include "Aql/QueryCache.h"
 #include "Aql/QueryExecutionState.h"
@@ -1142,32 +1143,25 @@ static void JS_QueryCachePropertiesAql(
     TRI_V8_THROW_EXCEPTION_USAGE("AQL_QUERY_CACHE_PROPERTIES(<properties>)");
   }
 
-  auto queryCache = arangodb::aql::QueryCache::instance();
-
+  Result rv;
+  VPackBuilder builder;
   if (args.Length() == 1) {
     // called with options
     auto obj = args[0]->ToObject();
 
-    std::pair<std::string, size_t> cacheProperties;
-    // fetch current configuration
-    queryCache->properties(cacheProperties);
-
-    if (obj->Has(TRI_V8_ASCII_STRING(isolate, "mode"))) {
-      cacheProperties.first =
-          TRI_ObjectToString(obj->Get(TRI_V8_ASCII_STRING(isolate, "mode")));
+    int res = TRI_V8ToVPack(isolate, builder, obj, false);
+    if(res != TRI_ERROR_NO_ERROR){
+      THROW_ARANGO_EXCEPTION_MESSAGE(res,"failed to convert to vpack");
     }
 
-    if (obj->Has(TRI_V8_ASCII_STRING(isolate, "maxResults"))) {
-      cacheProperties.second = static_cast<size_t>(
-          TRI_ObjectToInt64(obj->Get(TRI_V8_ASCII_STRING(isolate, "maxResults"))));
-    }
-
-    // set mode and max elements
-    queryCache->setProperties(cacheProperties);
+    rv = arangodb::aql::cache::properties(builder.slice());
+    if(rv.fail()){ THROW_ARANGO_EXCEPTION(rv); }
+    builder.clear();
   }
 
-  auto properties = queryCache->properties();
-  TRI_V8_RETURN(TRI_VPackToV8(isolate, properties.slice()));
+  rv = arangodb::aql::cache::properties(builder);
+  if(rv.fail()){ THROW_ARANGO_EXCEPTION(rv); }
+  TRI_V8_RETURN(TRI_VPackToV8(isolate, builder.slice()));
 
   // fetch current configuration and return it
   TRI_V8_TRY_CATCH_END
@@ -1192,7 +1186,8 @@ static void JS_QueryCacheInvalidateAql(
     TRI_V8_THROW_EXCEPTION_USAGE("AQL_QUERY_CACHE_INVALIDATE()");
   }
 
-  arangodb::aql::QueryCache::instance()->invalidate();
+  Result rv = arangodb::aql::cache::clear();
+  if(rv.fail()){ THROW_ARANGO_EXCEPTION(rv); }
   TRI_V8_TRY_CATCH_END
 }
 

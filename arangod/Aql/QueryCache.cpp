@@ -115,11 +115,13 @@ QueryCacheResultEntry* QueryCacheDatabaseEntry::lookup(
 
   // found some result in cache
 
-  if (queryString.size() != (*it).second->_queryString.size() ||
-      memcmp(queryString.data(), (*it).second->_queryString.c_str(), queryString.size()) != 0) {
-    // found something, but obviously the result of a different query with the
-    // same hash
-    return nullptr;
+  if(!( queryString.empty() && (*it).second->_queryString.empty() )){ //avoids nullptr access
+    if (queryString.size() != (*it).second->_queryString.size() ||
+        memcmp(queryString.data(), (*it).second->_queryString.c_str(), queryString.size()) != 0) {
+      // found something, but obviously the result of a different query with the
+      // same hash
+      return nullptr;
+    }
   }
 
   // found an entry
@@ -154,10 +156,11 @@ void QueryCacheDatabaseEntry::store(uint64_t hash,
 
       if (it2 == _entriesByCollection.end()) {
         // no entry found for collection. now create it
-        _entriesByCollection.emplace(it, std::unordered_set<uint64_t>{hash});
+        _entriesByCollection.emplace(it, std::tuple<uint64_t,std::unordered_set<uint64_t>>(1,std::unordered_set<uint64_t>{hash}));
       } else {
         // there already was an entry for this collection
-        (*it2).second.emplace(hash);
+        auto& tuple = (*it2).second;
+        std::get<1>(tuple).emplace(hash);
       }
     }
   } catch (...) {
@@ -168,7 +171,9 @@ void QueryCacheDatabaseEntry::store(uint64_t hash,
       auto it2 = _entriesByCollection.find(it);
 
       if (it2 != _entriesByCollection.end()) {
-        (*it2).second.erase(hash);
+        auto& tuple = (*it2).second;
+        std::get<0>(tuple)++;
+        std::get<1>(tuple).erase(hash);
       }
     }
 
@@ -193,6 +198,21 @@ void QueryCacheDatabaseEntry::store(uint64_t hash,
   TRI_ASSERT(entry->_next == nullptr);
 }
 
+std::vector<uint64_t> QueryCacheDatabaseEntry::getInvalidationCounters(std::vector<std::string> const& collections){
+  std::vector<uint64_t> rv;
+  for(auto const& collection : collections){
+    auto it = _entriesByCollection.find(collection);
+
+    if (it == _entriesByCollection.end()) {
+      rv.push_back(0);
+      continue;
+    }
+    rv.push_back(std::get<0>(it->second));
+  }
+
+  return rv;
+}
+
 /// @brief invalidate all entries for the given collections in the
 /// database-specific cache
 void QueryCacheDatabaseEntry::invalidate(
@@ -211,7 +231,10 @@ void QueryCacheDatabaseEntry::invalidate(std::string const& collection) {
     return;
   }
 
-  for (auto& it2 : (*it).second) {
+  auto& tuple = (*it).second;
+  std::get<0>(tuple)++;
+
+  for (auto& it2 : std::get<1>(tuple)) {
     auto it3 = _entriesByHash.find(it2);
 
     if (it3 != _entriesByHash.end()) {
@@ -409,6 +432,21 @@ QueryCacheResultEntry* QueryCache::store(
   // store cache entry
   (*it).second->store(hash, entry.get());
   return entry.release();
+}
+
+std::vector<uint64_t> QueryCache::getInvalidationCounters(TRI_vocbase_t* vocbase, std::vector<std::string> const& collections){
+  std::vector<uint64_t> rv;
+  auto const part = getPart(vocbase);
+  READ_LOCKER(readLocker, _entriesLock[part]);
+
+  auto it = _entries[part].find(vocbase);
+
+  if (it == _entries[part].end()) {
+    return rv;
+  }
+
+  rv = (*it).second->getInvalidationCounters(collections);
+  return rv;
 }
 
 /// @brief invalidate all queries for the given collections

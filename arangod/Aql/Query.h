@@ -66,6 +66,7 @@ class Query;
 struct QueryProfile;
 class QueryRegistry;
 class V8Executor;
+class AqlItemBlock;
 
 /// @brief equery part
 enum QueryPart { PART_MAIN, PART_DEPENDENT };
@@ -83,7 +84,8 @@ class Query {
 
   Query(bool contextOwnedByExterior, TRI_vocbase_t*,
         std::shared_ptr<arangodb::velocypack::Builder> const& queryStruct,
-        std::shared_ptr<arangodb::velocypack::Builder> const& options, QueryPart);
+        std::shared_ptr<arangodb::velocypack::Builder> const& options, QueryPart,
+        uint64_t cacheId = 0);
 
   virtual ~Query();
 
@@ -96,12 +98,44 @@ class Query {
 
   QueryString const& queryString() const { return _queryString; }
 
+  uint64_t cacheId() const {
+    return _queryCacheId;
+  }
+
+  //// Cache Operations
+  /// Create and Finalize Cache
+  Result resultStart(bool checkCache = false);
+  Result cacheStore(uint64_t queryHash, bool checkCache = false);
+
+  /// Add Items to Cache
+  //Result cacheAdd(VPackSlice const&); //single doc
+  void   resultCancel(){ _resultBuilder.reset();}
+
+  Result resultAddPart(AqlItemBlock const&, std::size_t regs = 0);
+
+private:
+  Result resultAddComplete(AqlItemBlock const&);
+  // this function is just there to have the same interface in all functions
+  // it is possible that the cache is not used at all
+  // because the QueryResultV8 expects to be filled in one go this can not be
+  // used with getSome!
+  Result resultAddComplete(AqlItemBlock const&, v8::Isolate* isolate, QueryResultV8&, uint32_t& position, bool canCache = true);
+public:
+  /// Work on Cache Entry
+  // try to use cache -- will set _cacgedResultBuilder if possible
+  Result cacheUse(uint64_t queryHash); //fills _cachedResultBuilder member variable and initalizes / Array Iterator
+  bool   cacheEntryAvailable() { if (_cachedResultBuilder && _cachedResultIterator){return true;} return false;}
+  bool   cacheBuildingResult() { if (_resultBuilder){return true;} return false;}
+  Result cacheGetOrSkipSomePart(VPackBuilder& builder, bool skip, std::size_t atLeast, std::size_t atMost);
+  bool   cacheExhausted();
+  Result cacheCursorReset(std::size_t pos = 0);
+
   /// @brief Inject a transaction from outside. Use with care!
   void injectTransaction (transaction::Methods* trx) {
     _trx = trx;
     init();
   }
-  
+
   QueryProfile* profile() const {
     return _profile.get();
   }
@@ -110,15 +144,15 @@ class Query {
 
   void increaseMemoryUsage(size_t value) { _resourceMonitor.increaseMemoryUsage(value); }
   void decreaseMemoryUsage(size_t value) { _resourceMonitor.decreaseMemoryUsage(value); }
-  
+
   ResourceMonitor* resourceMonitor() { return &_resourceMonitor; }
 
   /// @brief return the start timestamp of the query
   double startTime() const { return _startTime; }
-  
+
   /// @brief return the current runtime of the query
   double runTime(double now) const { return now - _startTime; }
-  
+
   /// @brief return the current runtime of the query
   double runTime() const { return runTime(TRI_microtime()); }
 
@@ -146,8 +180,8 @@ class Query {
   TRI_voc_tick_t id() const { return _id; }
 
   /// @brief getter for _ast
-  Ast* ast() const { 
-    return _ast.get(); 
+  Ast* ast() const {
+    return _ast.get();
   }
 
   /// @brief add a node to the list of nodes
@@ -163,10 +197,10 @@ class Query {
 
   /// @brief register a potentially UTF-8-escaped string
   /// the string is freed when the query is destroyed
-  char* registerEscapedString(char const* p, size_t length, size_t& outLength) { 
-    return _resources.registerEscapedString(p, length, outLength); 
+  char* registerEscapedString(char const* p, size_t length, size_t& outLength) {
+    return _resources.registerEscapedString(p, length, outLength);
   }
-  
+
   /// @brief register an error, with an optional parameter inserted into printf
   /// this also makes the query abort
   void registerError(int, char const* = nullptr);
@@ -177,7 +211,7 @@ class Query {
 
   /// @brief register a warning
   virtual void registerWarning(int, char const* = nullptr);
-  
+
   void prepare(QueryRegistry*, uint64_t queryHash);
 
   /// @brief execute an AQL query
@@ -195,7 +229,7 @@ class Query {
 
   /// @brief get v8 executor
   V8Executor* v8Executor();
-  
+
   /// @brief cache for regular expressions constructed by the query
   RegexCache* regexCache() { return &_regexCache; }
 
@@ -204,7 +238,7 @@ class Query {
 
   /// @brief inject the engine
   void setEngine(ExecutionEngine* engine);
-  
+
   void releaseEngine();
 
   /// @brief return the transaction, if prepared
@@ -230,7 +264,7 @@ class Query {
   /// @brief transform the list of warnings to VelocyPack.
   ///        NOTE: returns nullptr if there are no warnings.
   std::shared_ptr<arangodb::velocypack::Builder> warningsToVelocyPack() const;
-  
+
   /// @brief get a description of the query's current state
   std::string getStateString() const;
 
@@ -238,16 +272,20 @@ class Query {
   Graph const* lookupGraphByName(std::string const& name);
 
   /// @brief return the bind parameters as passed by the user
-  std::shared_ptr<arangodb::velocypack::Builder> bindParameters() const { 
-    return _bindParameters.builder(); 
+  std::shared_ptr<arangodb::velocypack::Builder> bindParameters() const {
+    return _bindParameters.builder();
   }
- 
+
   QueryExecutionState::ValueType state() const { return _state; }
+
+  /// @brief calculate a hash value for the query and bind parameters
+  uint64_t hash();
+
 
  private:
   /// @brief initializes the query
   void init();
-  
+
   /// @brief prepare an AQL query, this is a preparation for execute, but
   /// execute calls it internally. The purpose of this separate method is
   /// to be able to only prepare a query from VelocyPack and then store it in the
@@ -259,11 +297,12 @@ class Query {
   /// @brief log a query
   void log();
 
-  /// @brief calculate a hash value for the query and bind parameters
-  uint64_t hash();
-
   /// @brief whether or not the query cache can be used for the query
-  bool canUseQueryCache() const;
+  // probably we do not need to distinguish, if so we can store use querycache
+  // in the execute functions and reuse it not loosing performance by redundant
+  // lookup
+  bool canReadFromQueryCache();
+  bool canWriteToQueryCache();
 
  private:
   /// @brief neatly format exception messages for the users
@@ -284,10 +323,10 @@ class Query {
  private:
   /// @brief query id
   TRI_voc_tick_t _id;
-  
+
   /// @brief current resources and limits used by query
   ResourceMonitor _resourceMonitor;
-  
+
   /// @brief resources used by query
   QueryResources _resources;
 
@@ -302,9 +341,11 @@ class Query {
 
   /// @brief graphs used in query, identified by name
   std::unordered_map<std::string, Graph*> _graphs;
-  
+
   /// @brief the actual query string
   QueryString _queryString;
+
+  uint64_t _queryCacheId;
 
   /// @brief query in a VelocyPack structure
   std::shared_ptr<arangodb::velocypack::Builder> const _queryBuilder;
@@ -315,12 +356,19 @@ class Query {
   /// @brief query options
   std::shared_ptr<arangodb::velocypack::Builder> _options;
 
+  /// @brief cachedResultBuilder
+  std::shared_ptr<arangodb::velocypack::Builder> _resultBuilder;
+  std::shared_ptr<arangodb::velocypack::Builder> _cachedResultBuilder;
+  std::unique_ptr<velocypack::ArrayIterator> _cachedResultIterator;
+  std::string _cachedResultIdString;
+  std::vector<uint64_t> _invalidationCounters;
+
   /// @brief query options
   QueryOptions _queryOptions;
 
   /// @brief collections used in the query
   Collections _collections;
-  
+
   /// @brief _ast, we need an ast to manage the memory for AstNodes, even
   /// if we do not have a parser, because AstNodes occur in plans and engines
   std::unique_ptr<Ast> _ast;
