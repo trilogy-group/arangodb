@@ -12,40 +12,35 @@
 $ErrorActionPreference = "Stop"
 $PSDefaultParameterValues['*:ErrorAction']='Stop'
 
-$arango_source = split-path -parent $script_path
+Import-Module VSSetup
 
-$registry_base = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\SxS"
+$arango_source = split-path -parent $PSScriptRoot
 
-if(Test-Path "${registry_base}\VC7") {
-    $vcpath=$(Get-ItemProperty "${registry_base}\VC7")."$vc_version"
-} elseif(Test-Path "${registry_base}\VS7") {
-    $vcpath=$(Get-ItemProperty "${registry_base}\VS7")."$vc_version"
-} else {
-    echo "unable to find VisualStudio Registry Key"
-    exit 1
-}
+$cl = $(Get-ChildItem $(Get-VSSetupInstance).InstallationPath -Filter cl.exe -Recurse | Select-Object Fullname |Where {$_.FullName -match "Hostx64\\x64"}).FullName
+$cl_path = Split-Path -Parent $cl
 
-$env:GYP_MSVS_OVERRIDE_PATH="${vcpath}\bin"
-$env:CC="${vcpath}\bin\cl.exe"
-$env:CXX="${vcpath}\bin\cl.exe"
+$env:GYP_MSVS_OVERRIDE_PATH=$cl_path
+$env:CC=$cl
+$env:CXX=$cl
 
 # print configuration
-echo "do build:               $do_build"
-echo "extra args:             $Params"
-echo "configuration:          $config"
-echo "source path:            $arango_source"
-echo "generator:              $generator"
-echo "VC version:             $vc_version"
-echo "CC:                     ${env:CC}"
-echo "CXX:                    ${env:CXX}"
-echo "GYP_MSVS_OVERRIDE_PATH: ${vcpath}\bin"
+Write-Host "build                 :"$build
+Write-Host "skip_packaging        :"$skip_packaging
+Write-Host "extra args            :"$Args
+Write-Host "configuration         :"$config
+Write-Host "source path           :"$arango_source
+Write-Host "generator             :"$generator
+Write-Host "VC version            :"$vc_version
+Write-Host "CC                    :"$env:CC
+Write-Host "CXX                   :"$env:CXX
+Write-Host "GYP_MSVS_OVERRIDE_PATH:"$cl_path
 
 Start-Sleep -s 2
 
 # configure
-cmake -G "$generator" -DCMAKE_BUILD_TYPE="$config" -DSKIP_PACKAGING=ON "$arango_source" @Params
+cmake -G "$generator" -DCMAKE_BUILD_TYPE="$config" -DSKIP_PACKAGING="$skip_packaging" $Args "$arango_source"
 
 # build - with msbuild
-if ($do_build) {
+if ($build) {
     cmake --build . --config "$config"
 }

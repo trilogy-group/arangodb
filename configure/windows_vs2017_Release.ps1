@@ -3,16 +3,18 @@
 .SYNOPSIS
     Configures and builds ArangoDB
 .EXAMPLE
-    mkdir arango-build; cd arangod-build; ../arangodb/configure/<this_file> [-build] [cmake params]
+    mkdir arango-build; cd arangod-build; ../arangodb/configure/<this_file> [-build] [-packaging] [cmake params]
 #>
-param([switch] $build)
-if ($build) { $do_build = $TRUE } else { $do_build = $FALSE }
-$Params = $Args
+param([switch] $build, [switch] $packaging)
+
+if($packaging)
+{$skip_packaging = "OFF"}
+else
+{$skip_packaging = "ON"} 
 
 $config = "Release"
 
 $vc_version = "15.0"
 $generator = "Visual Studio 15 2017 Win64"
 
-$script_path = split-path -parent $myinvocation.mycommand.definition
-. "$script_path/windows_common.ps1"
+. "$PSScriptRoot/windows_common.ps1" $Args
