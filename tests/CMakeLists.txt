@@ -84,6 +84,7 @@ add_executable(
   Basics/LoggerTest.cpp
   Basics/StringBufferTest.cpp
   Basics/StringUtilsTest.cpp
+  Basics/ResultTest.cpp
   Basics/VelocyPackHelper-test.cpp
   Cache/BucketState.cpp
   Cache/CachedValue.cpp
