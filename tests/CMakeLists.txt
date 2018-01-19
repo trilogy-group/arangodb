@@ -154,6 +154,7 @@ endif()
 add_executable(standalonetests
   standalone_main.cpp
   Basics/ResultTest.cpp
+  ${CMAKE_SOURCE_DIR}/lib/Basics/error.cpp
 )
 
 target_include_directories(standalonetests PRIVATE

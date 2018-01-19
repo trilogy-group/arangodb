@@ -26,6 +26,7 @@
 #define ARANGODB_BASICS_RESULT_H 1
 
 #include "Basics/Common.h"
+#include "Basics/error.h"
 #include <type_traits>
 #include <iostream>
 #include <cstdint>
@@ -34,37 +35,41 @@ namespace arangodb {
 
 class Result {
  public:
-  Result() noexcept(std::is_nothrow_default_constructible<std::string>::value)
-    : _errorNumber(TRI_ERROR_NO_ERROR) {}
+  Result() noexcept
+    : _errorNumber(TRI_ERROR_NO_ERROR)
+    {}
 
-  Result(int errorNumber)
-    : _errorNumber(errorNumber){
-    if (errorNumber != TRI_ERROR_NO_ERROR) {
-      _errorMessage = TRI_errno_string(errorNumber);
-    }
-  }
+  Result(int errorNumber) noexcept
+    : _errorNumber(errorNumber)
+    {}
 
   Result(int errorNumber, std::string const& errorMessage)
-      : _errorNumber(errorNumber), _errorMessage(errorMessage) {}
+    : _errorNumber(errorNumber)
+    , _errorMessage(std::make_unique<std::string>(errorMessage))
+    {}
 
   Result(int errorNumber, std::string&& errorMessage)
-      : _errorNumber(errorNumber), _errorMessage(std::move(errorMessage)) {}
+    : _errorNumber(errorNumber)
+    , _errorMessage(std::make_unique<std::string>(std::move(errorMessage)))
+    {}
 
   // copy
   Result(Result const& other)
-      : _errorNumber(other._errorNumber),
-        _errorMessage(other._errorMessage) {}
+    : _errorNumber(other._errorNumber)
+    , _errorMessage(std::make_unique<std::string>(*other._errorMessage))
+    {}
 
   Result& operator=(Result const& other) {
     _errorNumber = other._errorNumber;
-    _errorMessage = other._errorMessage;
+    _errorMessage = std::make_unique<std::string>(*other._errorMessage);
     return *this;
   }
 
   // move
   Result(Result&& other) noexcept
-      : _errorNumber(other._errorNumber),
-        _errorMessage(std::move(other._errorMessage)) {}
+      : _errorNumber(other._errorNumber)
+      , _errorMessage(std::move(other._errorMessage))
+      {}
 
   Result& operator=(Result&& other) noexcept {
     _errorNumber = other._errorNumber;
@@ -74,8 +79,16 @@ class Result {
 
  public:
   int errorNumber() const { return _errorNumber; }
-  std::string errorMessage() const& { return _errorMessage; }
-  std::string errorMessage() && { return std::move(_errorMessage); }
+  std::string errorMessage() const {
+    if (!_errorMessage) {
+      if(_errorNumber != TRI_ERROR_NO_ERROR){
+        _errorMessage = std::make_unique<std::string>(TRI_errno_string(_errorNumber));
+      } else {
+        _errorMessage = std::make_unique<std::string>();
+      }
+    }
+    return *_errorMessage;
+  }
 
   bool ok()   const { return _errorNumber == TRI_ERROR_NO_ERROR; }
   bool fail() const { return !ok(); }
@@ -85,30 +98,25 @@ class Result {
 
   Result& reset(int errorNumber = TRI_ERROR_NO_ERROR) {
     _errorNumber = errorNumber;
-
-    if (errorNumber != TRI_ERROR_NO_ERROR) {
-      _errorMessage = TRI_errno_string(errorNumber);
-    } else {
-      _errorMessage.clear();
-    }
+    _errorMessage.reset();
     return *this;
   }
 
   Result& reset(int errorNumber, std::string const& errorMessage) {
     _errorNumber = errorNumber;
-    _errorMessage = errorMessage;
+    _errorMessage = std::make_unique<std::string>(errorMessage);
     return *this;
   }
 
   Result& reset(int errorNumber, std::string&& errorMessage) noexcept {
     _errorNumber = errorNumber;
-    _errorMessage = std::move(errorMessage);
+    _errorMessage = std::make_unique<std::string>(std::move(errorMessage));
     return *this;
   }
 
   Result& reset(Result const& other) {
     _errorNumber = other._errorNumber;
-    _errorMessage = other._errorMessage;
+    _errorMessage = std::make_unique<std::string>(*other._errorMessage);
     return *this;
   }
 
@@ -120,8 +128,7 @@ class Result {
 
  protected:
   int _errorNumber;
-  std::string _errorMessage;
-
+  mutable std::unique_ptr<std::string> _errorMessage;
 };
 
 
