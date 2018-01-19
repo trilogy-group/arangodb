@@ -150,7 +150,7 @@ if (USE_IRESEARCH)
   endforeach()
 endif()
 
-# test classes that are independet of the arangod library
+# test cases that are independet of the arangod library
 add_executable(standalonetests
   standalone_main.cpp
   Basics/ResultTest.cpp
