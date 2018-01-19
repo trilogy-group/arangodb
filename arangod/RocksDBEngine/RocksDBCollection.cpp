@@ -756,6 +756,7 @@ void RocksDBCollection::truncate(transaction::Methods* trx,
   for (std::shared_ptr<Index> const& index : _indexes) {
     RocksDBIndex* rindex = static_cast<RocksDBIndex*>(index.get());
     rindex->truncate(trx);
+    //rindex->afterTruncate();
   }
   _needToPersistIndexEstimates = true;
   
