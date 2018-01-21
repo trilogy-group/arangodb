@@ -150,18 +150,20 @@ if (USE_IRESEARCH)
   endforeach()
 endif()
 
-# test cases that are independet of the arangod library
-add_executable(standalonetests
-  standalone_main.cpp
-  Basics/ResultTest.cpp
-  ${CMAKE_SOURCE_DIR}/lib/Basics/error.cpp
-)
-
-target_include_directories(standalonetests PRIVATE
-  ${INCLUDE_DIRECTORIES}
-)
-
-target_include_directories(standalonetests SYSTEM PRIVATE
-  ${CMAKE_SOURCE_DIR}/3rdParty/catch
-  ${CMAKE_SOURCE_DIR}/3rdParty/fakeit
-)
+# re-enable as soon as possible
+#
+# # test cases that are independet of the arangod library
+# add_executable(standalonetests
+#   standalone_main.cpp
+#   Basics/ResultTest.cpp
+#   ${CMAKE_SOURCE_DIR}/lib/Basics/error.cpp
+# )
+#
+# target_include_directories(standalonetests PRIVATE
+#   ${INCLUDE_DIRECTORIES}
+# )
+#
+# target_include_directories(standalonetests SYSTEM PRIVATE
+#   ${CMAKE_SOURCE_DIR}/3rdParty/catch
+#   ${CMAKE_SOURCE_DIR}/3rdParty/fakeit
+# )

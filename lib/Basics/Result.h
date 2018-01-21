@@ -56,12 +56,17 @@ class Result {
   // copy
   Result(Result const& other)
     : _errorNumber(other._errorNumber)
-    , _errorMessage(std::make_unique<std::string>(*other._errorMessage))
+    , _errorMessage( other._errorMessage
+                   ? std::make_unique<std::string>(*other._errorMessage)
+                   : nullptr
+                   )
     {}
 
   Result& operator=(Result const& other) {
     _errorNumber = other._errorNumber;
-    _errorMessage = std::make_unique<std::string>(*other._errorMessage);
+    _errorMessage = other._errorMessage
+                  ? std::make_unique<std::string>(*other._errorMessage)
+                  : nullptr;
     return *this;
   }
 
@@ -116,7 +121,9 @@ class Result {
 
   Result& reset(Result const& other) {
     _errorNumber = other._errorNumber;
-    _errorMessage = std::make_unique<std::string>(*other._errorMessage);
+    _errorMessage = other._errorMessage
+                  ? std::make_unique<std::string>(*other._errorMessage)
+                  : nullptr;
     return *this;
   }
 

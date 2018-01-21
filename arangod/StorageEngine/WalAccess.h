@@ -54,7 +54,9 @@ struct WalAccessResult : public Result {
   
   WalAccessResult& operator=(WalAccessResult const& other) {
     _errorNumber = other._errorNumber;
-    _errorMessage = std::make_unique<std::string>(*other._errorMessage);
+    _errorMessage = other._errorMessage
+                  ? std::make_unique<std::string>(*other._errorMessage)
+                  : nullptr;
     _fromTickIncluded = other._fromTickIncluded;
     _lastIncludedTick = other._lastIncludedTick;
     _latestTick = other._latestTick;
