@@ -1,4 +1,4 @@
-#REQUIRES -Version 2.0
+#REQUIRES -Version 5.0
 <#
 .SYNOPSIS
     Configures and builds ArangoDB

@@ -1,4 +1,4 @@
-#REQUIRES -Version 2.0
+#REQUIRES -Version 5.0
 <#
 .SYNOPSIS
     Common base of ArangoDB Windows build scripts.
@@ -18,6 +18,16 @@ $arango_source = split-path -parent $PSScriptRoot
 
 $cl = $(Get-ChildItem $(Get-VSSetupInstance).InstallationPath -Filter cl.exe -Recurse | Select-Object Fullname |Where {$_.FullName -match "Hostx64\\x64"}).FullName
 $cl_path = Split-Path -Parent $cl
+
+If ( -NOT (Test-Path "$PSScriptRoot\path.set"))
+{
+    $oldpath = (Get-ItemProperty -Path ‘Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Session Manager\Environment’ -Name PATH).path
+    $newpath = “$oldpath;$cl_path”
+    Set-ItemProperty -Path ‘Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Session Manager\Environment’ -Name PATH -Value $newPath
+    echo $null > "$PSScriptRoot\path.set"
+}
+
+$env:Path = [System.Environment]::ExpandEnvironmentVariables([System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User"))
 
 $env:GYP_MSVS_OVERRIDE_PATH=$cl_path
 $env:CC=$cl
