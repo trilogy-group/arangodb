@@ -25,212 +25,48 @@
 #ifndef ARANGODB_BASICS_RESULT_H
 #define ARANGODB_BASICS_RESULT_H 1
 
-#include "Basics/Common.h"
-#include "Basics/error.h"
+#include <memory>
+#include <string>
 #include <type_traits>
-#include <iostream>
-#include <cstdint>
 
 namespace arangodb {
-
 class Result {
  public:
-  Result() noexcept
-    : _errorNumber(TRI_ERROR_NO_ERROR)
-    {}
-
-  Result(int errorNumber) noexcept
-    : _errorNumber(errorNumber)
-    {}
-
-  Result(int errorNumber, std::string const& errorMessage)
-    : _errorNumber(errorNumber)
-    , _errorMessage(std::make_unique<std::string>(errorMessage))
-    {}
-
-  Result(int errorNumber, std::string&& errorMessage)
-    : _errorNumber(errorNumber)
-    , _errorMessage(std::make_unique<std::string>(std::move(errorMessage)))
-    {}
+  Result() noexcept;
+  Result(int errorNumber) noexcept;
+  Result(int errorNumber, std::string const& errorMessage);
+  Result(int errorNumber, std::string&& errorMessage);
 
   // copy
-  Result(Result const& other)
-    : _errorNumber(other._errorNumber)
-    , _errorMessage( other._errorMessage
-                   ? std::make_unique<std::string>(*other._errorMessage)
-                   : nullptr
-                   )
-    {}
-
-  Result& operator=(Result const& other) {
-    _errorNumber = other._errorNumber;
-    _errorMessage = other._errorMessage
-                  ? std::make_unique<std::string>(*other._errorMessage)
-                  : nullptr;
-    return *this;
-  }
+  Result(Result const& other);
+  Result& operator=(Result const& other);
 
   // move
-  Result(Result&& other) noexcept
-      : _errorNumber(other._errorNumber)
-      , _errorMessage(std::move(other._errorMessage))
-      {}
-
-  Result& operator=(Result&& other) noexcept {
-    _errorNumber = other._errorNumber;
-    _errorMessage = std::move(other._errorMessage);
-    return *this;
-  }
+  Result(Result&& other) noexcept;
+  Result& operator=(Result&& other) noexcept;
 
  public:
-  int errorNumber() const { return _errorNumber; }
-  std::string errorMessage() const {
-    if (!_errorMessage) {
-      if(_errorNumber != TRI_ERROR_NO_ERROR){
-        _errorMessage = std::make_unique<std::string>(TRI_errno_string(_errorNumber));
-      } else {
-        _errorMessage = std::make_unique<std::string>();
-      }
-    }
-    return *_errorMessage;
-  }
+  int errorNumber() const;
+  std::string errorMessage() const&;
+  std::string errorMessage() &&;
 
-  bool ok()   const { return _errorNumber == TRI_ERROR_NO_ERROR; }
-  bool fail() const { return !ok(); }
+  bool ok() const;
+  bool fail() const;
 
-  bool is(int errorNumber) const { return _errorNumber == errorNumber; }
-  bool isNot(int errorNumber) const { return !is(errorNumber); }
+  bool is(int errorNumber) const;
+  bool isNot(int errorNumber) const;
 
-  Result& reset(int errorNumber = TRI_ERROR_NO_ERROR) {
-    _errorNumber = errorNumber;
-    _errorMessage.reset();
-    return *this;
-  }
-
-  Result& reset(int errorNumber, std::string const& errorMessage) {
-    _errorNumber = errorNumber;
-    _errorMessage = std::make_unique<std::string>(errorMessage);
-    return *this;
-  }
-
-  Result& reset(int errorNumber, std::string&& errorMessage) noexcept {
-    _errorNumber = errorNumber;
-    _errorMessage = std::make_unique<std::string>(std::move(errorMessage));
-    return *this;
-  }
-
-  Result& reset(Result const& other) {
-    _errorNumber = other._errorNumber;
-    _errorMessage = other._errorMessage
-                  ? std::make_unique<std::string>(*other._errorMessage)
-                  : nullptr;
-    return *this;
-  }
-
-  Result& reset(Result&& other) noexcept {
-    _errorNumber = other._errorNumber;
-    _errorMessage = std::move(other._errorMessage);
-    return *this;
-  }
+  Result& reset();
+  Result& reset(int errorNumber);
+  Result& reset(int errorNumber, std::string const& errorMessage);
+  Result& reset(int errorNumber, std::string&& errorMessage) noexcept;
+  Result& reset(Result const& other);
+  Result& reset(Result&& other) noexcept;
 
  protected:
   int _errorNumber;
   mutable std::unique_ptr<std::string> _errorMessage;
 };
+}  // namespace arangodb
 
-
-template <typename T>
-struct TypedResult {
-  //exception to the rule: "value instead of _value" to allow easier access to members
-  using ValueType = T;
-  ValueType value;
-private:
-  bool _valid = false;
-  Result _result;
-
-public:
-  TypedResult() noexcept(std::is_nothrow_default_constructible<std::string>::value &&
-                         std::is_nothrow_default_constructible<T>::value
-                        )= default;
-
-  template <bool x = std::is_lvalue_reference<T>::value ||
-                     ( !std::is_move_constructible<T>::value &&
-                       !std::is_move_assignable<T>::value )
-           ,typename std::enable_if<x>::type* = nullptr
-           >
-  TypedResult(ValueType value
-             ,int error = TRI_ERROR_NO_ERROR
-             ,std::string message = ""
-             )
-    : value(value)
-    , _valid(true)
-    ,_result(error, std::move(message))
-    {
-      std::cerr << "copy" << std::endl;
-    }
-
-  template <int x = !std::is_lvalue_reference<T>::value
-                    && std::is_move_constructible<T>::value
-           ,typename std::enable_if<x>::type* = nullptr
-           >
-  TypedResult(ValueType value
-             ,int error = TRI_ERROR_NO_ERROR
-             ,std::string message = ""
-             )
-    : value(std::move(value))
-    , _valid(true)
-    ,_result(error, std::move(message))
-    {
-      std::cerr << "move" << std::endl;
-    }
-
-  template <std::uint32_t x = !std::is_lvalue_reference<T>::value &&
-                              !std::is_move_constructible<T>::value &&
-                               std::is_move_assignable<T>::value
-           ,typename std::enable_if<x>::type* = nullptr
-           >
-  TypedResult(ValueType&& value
-             ,int error = TRI_ERROR_NO_ERROR
-             ,std::string message = ""
-             )
-    : _valid(true)
-    ,_result(error, std::move(message))
-    {
-      value = std::move(value);
-      std::cerr << "move assign" << std::endl;
-    }
-
-  //TODO add more constructors
-
-  // forward to result's functions
-  int errorNumber() const { return _result.errorNumber(); }
-  std::string errorMessage() const& { return _result.errorMessage(); }
-  std::string errorMessage() && { return std::move(std::move(_result).errorMessage()); }
-
-  bool ok()   const { return _result.ok(); }
-  bool fail() const { return !ok(); }
-  bool is(int errorNumber) const { return _result.errorNumber() == errorNumber; }
-  bool isNot(int errorNumber) const { return !is(errorNumber); }
-
-  // this function does not modify the value - it behaves exactly as it
-  // does for the standalone result
-  template <typename ...Args>
-  TypedResult& reset(Args&&... args) {
-    _result.reset(std::forward<Args>(args)...);
-    return *this;
-  }
-
-  // some functions to retrieve the internal result
-  Result  copyResult() const &  { return _result; }
-  Result  takeResult() { return std::move(_result); }
-  Result& getResult() const &  { return _result; }
-
-  // check if we have valid result value - this is not mandatory
-  // it allows us to use values instead of pointers if an optional result is required
-  bool vaild(){ return _valid; }
-  bool vaild(bool val){ _valid = val; return _valid; }
-
-};
-
-}
 #endif

@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief test suite for TypedResult class
+/// @brief test suite for ResultValue class
 ///
 /// @file
 ///
@@ -25,17 +25,25 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "Basics/Result.h"
+#include "Basics/ResultValue.h"
 
 #include "catch.hpp"
 #include <type_traits>
 
 
 using namespace arangodb;
+using namespace arangodb::basics;
 using namespace std;
 
+extern template class ResultValue<int>;
+extern template class ResultValue<int&>;
+extern template class ResultValue<int const&>;
+extern template class ResultValue<int*>;
 
-TypedResult<int> function_a(int i){
-  return TypedResult<int>(i);
+extern template class ResultValue<std::string>;
+
+ResultValue<int> function_a(int i){
+  return ResultValue<int>(i);
 }
 
 Result function_b(){
@@ -76,25 +84,25 @@ SECTION("test_ResultTest1") {
     no_move& operator=(no_move&&) = default;
   };
 
-  TypedResult<int>        int_result(integer);
+  ResultValue<int>        int_result(integer);
   CHECK((std::is_same<decltype(int_result.value), int>::value));
 
-  TypedResult<int&>       lvalue_ref_int_result(integer_lvalue_ref);
+  ResultValue<int&>       lvalue_ref_int_result(integer_lvalue_ref);
   CHECK((std::is_same<decltype(lvalue_ref_int_result.value), int&>::value));
 
-  TypedResult<int const&> lvalue_cref_int_result(integer_lvalue_cref);
+  ResultValue<int const&> lvalue_cref_int_result(integer_lvalue_cref);
   CHECK((std::is_same<decltype(lvalue_cref_int_result.value), int const&>::value));
 
-  TypedResult<int> rvalue_int_result(std::move(integer_lvalue_ref));
+  ResultValue<int> rvalue_int_result(std::move(integer_lvalue_ref));
   CHECK((std::is_same<decltype(rvalue_int_result.value), int>::value));
 
-  TypedResult<int*> int_ptr_result(integer_ptr);
+  ResultValue<int*> int_ptr_result(integer_ptr);
   CHECK((std::is_same<decltype(int_ptr_result.value), int*>::value));
 
-  TypedResult<std::string> string_result{str};
-  TypedResult<std::string> string_move_result{std::move(str)};
+  ResultValue<std::string> string_result{str};
+  ResultValue<std::string> string_move_result{std::move(str)};
 
-  TypedResult<no_move>  no_move_result(no_move{});
+  ResultValue<no_move>  no_move_result(no_move{});
 
   function_b();
 
