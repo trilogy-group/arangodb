@@ -788,14 +788,14 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
 
         if(query->cacheEntryAvailable()){
           // cache available
-          LOG_DEVEL << query->cacheId() << " handler - getsome (cache) - atLeast: " << atLeast << " atMost: " << atMost;
+          //LOG_DEVEL << query->cacheId() << " handler - getsome (cache) - atLeast: " << atLeast << " atMost: " << atMost;
           Result rv = query->cacheGetOrSkipSomePart(answerBuilder, false /*skip*/, atLeast, atMost);
           if(rv.fail()){
               LOG_DEVEL << query->cacheId() << " handler - getsome (cache) - failed!!!!";
               generateError(rv);
               return;
           }
-          LOG_DEVEL << query->cacheId() << " handler - getsome - QUERY DELIVERED FORM CACHE" ;
+          //LOG_DEVEL << query->cacheId() << " handler - getsome - QUERY DELIVERED FORM CACHE" ;
 
         } else {
           // no cache available
@@ -852,14 +852,14 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
         size_t skipped = 0;
         if(query->cacheEntryAvailable()){
           // cache available
-          LOG_DEVEL << operation << "(cache) - atLeast: " << atLeast << " atMost: " << atMost;
+          //LOG_DEVEL << operation << "(cache) - atLeast: " << atLeast << " atMost: " << atMost;
           Result rv = query->cacheGetOrSkipSomePart(answerBuilder, true /*skip*/, atLeast, atMost);
           THROW_ARANGO_EXCEPTION_IF_FAIL(rv);
         } else {
           try {
             if (shardId.empty()) {
               //dbserver
-              LOG_DEVEL << "DBSERVER";
+              //LOG_DEVEL << "DBSERVER";
               if(query->cacheBuildingResult()){
                 std::unique_ptr<AqlItemBlock> items;
                 items.reset(query->engine()->getSome(atLeast, atMost));
@@ -933,7 +933,7 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
         if(query->cacheEntryAvailable()){
           answerBuilder.add("error", VPackValue(false));
           answerBuilder.add("code", VPackValue(0));
-          LOG_DEVEL << "RESET CACHE CURSOR";
+          //LOG_DEVEL << "RESET CACHE CURSOR";
           query->cacheCursorReset();
         } else {
           int res;
@@ -960,7 +960,7 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
           } else {
             LOG_DEVEL << "THIS MAY NOT HAPPEN";
             LOG_DEVEL << " #### position pos; " << pos;
-            TRI_ASSERT(false);
+            //TRI_ASSERT(false);
             rv = query->cacheCursorReset();
           }
           answerBuilder.add("error", VPackValue(rv.fail()));
@@ -1000,18 +1000,17 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
         try {
 
           if(query->cacheBuildingResult()){
-            LOG_DEVEL << "#####PRIMARY####### ";
-            
+            //LOG_DEVEL << "#####PRIMARY####### ";
             TRI_ASSERT(query->cacheId());
 
             std::unique_ptr<AqlItemBlock> items;
             try {
               TRI_ASSERT(query);
               TRI_ASSERT(query->engine());
-              if(query->engine()->hasMore()){
+              if(query->engine()->hasMore() > 0){
                 LOG_DEVEL << "has more!";
                 auto n = query->engine()->remaining();
-                LOG_DEVEL << "adding " << n << "items in shutdown";
+                LOG_DEVEL_IF(n < 0) << "adding " << n << "items in shutdown";
                 items.reset(query->engine()->getSome(n,n));
               }
             } catch (std::exception& e){

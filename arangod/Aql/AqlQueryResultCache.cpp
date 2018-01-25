@@ -24,7 +24,7 @@ using EN = arangodb::aql::ExecutionNode;
 std::string fakeQueryString(ExecutionPlan const* subPlan){
   std::string result;
   bool stringValid = subPlan->root()->fakeQueryString(result);
-  LOG_DEVEL_IF(stringValid) << " #COORDINATOR# subPlan String: '" << result <<"'";
+  //LOG_DEVEL_IF(stringValid) << " #COORDINATOR# subPlan String: '" << result <<"'";
   if (!stringValid) {
     result.clear();
   }

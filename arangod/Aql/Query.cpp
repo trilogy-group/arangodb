@@ -302,7 +302,7 @@ Result Query::cacheStore(uint64_t queryHash, bool checkCache){
 
     if(!checkCache || cache->getInvalidationCounters(_vocbase, this->collectionNames()) == _invalidationCounters){
       TRI_ASSERT(_resultBuilder);
-      LOG_DEVEL << "value to be stored has " << _resultBuilder->slice().length() << " items";
+      //LOG_DEVEL << "value to be stored has " << _resultBuilder->slice().length() << " items";
       // finally store the generated result in the query cache
       //LOG_DEVEL << queryHash << " query - store: '" <<  _queryString; // << "' contents: @@@" << _resultBuilder->slice().toJson() << "@@@";
       auto result = cache->store(
@@ -324,7 +324,7 @@ Result Query::cacheUse(uint64_t queryHash){
   arangodb::aql::QueryCacheResultEntryGuard guard(cacheEntry);
 
   if (cacheEntry != nullptr) {
-    LOG_DEVEL_IF(_queryCacheId) << queryHash << " found query - string: " <<  _queryString;
+    //LOG_DEVEL_IF(_queryCacheId) << queryHash << " found query - string: " <<  _queryString;
     TRI_ASSERT(queryHash == _queryCacheId || ! _queryCacheId);
 
     // got a result from the query cache
@@ -394,7 +394,7 @@ Result Query::cacheCursorReset(std::size_t pos){
   Result rv;
   if (this->cacheEntryAvailable()){
     _cachedResultIterator.reset(new VPackArrayIterator(_cachedResultBuilder->slice()));
-    LOG_DEVEL << "iterator size: " << _cachedResultIterator->size() << " pos: " << pos;
+    //LOG_DEVEL << "iterator size: " << _cachedResultIterator->size() << " pos: " << pos;
     while (pos--) {
       LOG_DEVEL << "IN THE LOOP";
       _cachedResultIterator->next();
