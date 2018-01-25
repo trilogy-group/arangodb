@@ -25,6 +25,7 @@
 #define UTILS_AUTHENTICATION_HANDLER_H 1
 
 #include <velocypack/Slice.h>
+#include "Basics/Common.h"
 #include "Basics/Result.h"
 
 namespace arangodb {

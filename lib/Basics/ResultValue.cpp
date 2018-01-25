@@ -24,11 +24,10 @@
 
 #include "Basics/ResultValue.h"
 
+#include <utility>
 using namespace arangodb::basics;
 
 template class ResultValue<int>;
-template class ResultValue<int&>;
-template class ResultValue<int const&>;
 template class ResultValue<int*>;
 
 template class ResultValue<std::string>;

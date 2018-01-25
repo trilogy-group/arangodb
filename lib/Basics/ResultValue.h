@@ -36,6 +36,8 @@ namespace basics {
 template <typename ValueType>
 class ResultValue {
  public:
+  using BaseValueType = typename std::remove_const<
+      typename std::remove_reference<ValueType>::type>::type;
   ValueType value;
 
  public:
@@ -54,20 +56,40 @@ class ResultValue {
       std::is_nothrow_default_constructible<ValueType>::value);
 
   template <bool x = std::is_lvalue_reference<ValueType>::value ||
-                     (!std::is_move_constructible<ValueType>::value),
+                     std::is_copy_constructible<BaseValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
-  ResultValue(ValueType value);
+  ResultValue(BaseValueType& value);
 
-  template <bool x = (!std::is_lvalue_reference<ValueType>::value) &&
-                     std::is_copy_constructible<ValueType>::value &&
-                     (!std::is_move_constructible<ValueType>::value),
+  template <bool x = std::is_lvalue_reference<ValueType>::value ||
+                     std::is_copy_constructible<BaseValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
-  ResultValue(ValueType value, Result result);
+  ResultValue(BaseValueType& value, Result result);
 
-  template <bool x = (!std::is_lvalue_reference<ValueType>::value) &&
-                     std::is_move_constructible<ValueType>::value,
+  template <bool x = (std::is_lvalue_reference<ValueType>::value &&
+                      std::is_const<typename std::remove_reference<
+                          ValueType>::type>::value) ||
+                     (!std::is_reference<ValueType>::value &&
+                      std::is_copy_constructible<BaseValueType>::value),
             typename std::enable_if<x>::type* = nullptr>
-  ResultValue(ValueType&& value, Result result);
+  ResultValue(BaseValueType const& value);
+
+  template <bool x = (std::is_lvalue_reference<ValueType>::value &&
+                      std::is_const<typename std::remove_reference<
+                          ValueType>::type>::value) ||
+                     (!std::is_reference<ValueType>::value &&
+                      std::is_copy_constructible<BaseValueType>::value),
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(BaseValueType const& value, Result result);
+
+  template <bool x = !std::is_reference<ValueType>::value &&
+                     std::is_move_constructible<BaseValueType>::value,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(BaseValueType&& value);
+
+  template <bool x = !std::is_reference<ValueType>::value &&
+                     std::is_move_constructible<BaseValueType>::value,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(BaseValueType&& value, Result result);
 
   // TODO add more constructors
 

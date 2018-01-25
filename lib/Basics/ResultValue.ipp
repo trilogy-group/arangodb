@@ -41,16 +41,30 @@ ResultValue<ValueType>::ResultValue(Result&& result) noexcept(
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
-ResultValue<ValueType>::ResultValue(ValueType v) : value{v}, _result{} {}
+ResultValue<ValueType>::ResultValue(BaseValueType& v) : value{v}, _result{} {}
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
-ResultValue<ValueType>::ResultValue(ValueType v, Result result)
+ResultValue<ValueType>::ResultValue(BaseValueType& v, Result result)
     : value{v}, _result{result} {}
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
-ResultValue<ValueType>::ResultValue(ValueType&& v, Result result)
+ResultValue<ValueType>::ResultValue(BaseValueType const& v) : value{v}, _result{} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(BaseValueType const& v, Result result)
+    : value{v}, _result{result} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(BaseValueType&& v)
+    : value{std::move(v)}, _result{} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(BaseValueType&& v, Result result)
     : value{std::move(v)}, _result{result} {}
 
 template <typename ValueType>

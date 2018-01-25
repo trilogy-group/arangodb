@@ -22,100 +22,105 @@
 /// Copyright holder is ArangoDB GmbH, Cologne, Germany
 ///
 /// @author Jan Christoph Uhde
+/// @author Dan Larkin-York
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "Basics/Result.h"
 #include "Basics/ResultValue.h"
 
-#include "catch.hpp"
 #include <type_traits>
-
+#include "catch.hpp"
 
 using namespace arangodb;
 using namespace arangodb::basics;
 using namespace std;
 
 extern template class ResultValue<int>;
-extern template class ResultValue<int&>;
-extern template class ResultValue<int const&>;
 extern template class ResultValue<int*>;
-
 extern template class ResultValue<std::string>;
 
-ResultValue<int> function_a(int i){
-  return ResultValue<int>(i);
+ResultValue<int> function_a(int i) { return ResultValue<int>{i}; }
+
+Result function_b() {
+  auto rv = function_a(42);  // create one result and try modify / reuse
+                             // it to make copy elision happen
+
+  if (rv.ok()) {
+    CHECK(rv.value == 42);  // do something with the value
+  } else {
+    rv.reset(rv.errorNumber(), "error in function_b: " + rv.errorMessage());
+  }
+
+  if (false) {
+    rv.reset(23, std::string("the result is not valid because some other "
+                             "condition did not hold"));
+  }
+
+  return rv.takeResult();  // still move the result forward
 }
 
-Result function_b(){
-    auto rv = function_a(42); // create one result and try modify / reuse
-                              // it to make copy elision happen
+struct no_copy {
+  int member = 4;
+  no_copy() = default;
+  no_copy(no_copy const&) = delete;
+  no_copy& operator=(no_copy const&) = delete;
+  no_copy(no_copy&& other) : member{std::move(other.member)} {}
+  no_copy& operator=(no_copy&& other) {
+    member = std::move(other.member);
+    return *this;
+  }
+};
 
-    if(rv.ok()) {
-      CHECK(rv.value == 42); // do something with the value
-    } else {
-      rv.reset(rv.errorNumber(), "error in function_b: " + rv.errorMessage());
-    }
-
-    if(false){
-      rv.reset(23, std::string("the result is not valid because some other condition did not hold"));
-    }
-
-    return rv.takeResult(); //still move the result forward
-}
-
+struct no_move {
+  int member = 4;
+  no_move() = default;
+  no_move(no_move const& other) : member(other.member) {}
+  no_move& operator=(no_move const& other) {
+    member = other.member;
+    return *this;
+  }
+  no_move(no_move&&) = delete;
+  no_move& operator=(no_move&&) = default;
+};
 
 TEST_CASE("ResultTest", "[string]") {
+  ////////////////////////////////////////////////////////////////////////////////
+  /// @brief test_StringBuffer1
+  ////////////////////////////////////////////////////////////////////////////////
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief test_StringBuffer1
-////////////////////////////////////////////////////////////////////////////////
+  SECTION("test_ResultTest1") {
+    int integer = 43;
+    int& integer_lvalue_ref = integer;
+    int const& integer_lvalue_cref = integer;
+    int* integer_ptr = &integer;
+    std::string str = "arangodb rocks";
 
-SECTION("test_ResultTest1") {
-  int  integer = 43;
-  int& integer_lvalue_ref = integer;
-  int const&  integer_lvalue_cref = integer;
-  int* integer_ptr = &integer;
-  std::string str = "arangodb rocks";
+    ResultValue<int> int_result{integer};
+    CHECK((std::is_same<decltype(int_result.value), int>::value));
 
-  struct no_move {
-    int member = 4;
-    no_move() = default;
-    no_move(no_move&&) = delete;
-    no_move& operator=(no_move&&) = default;
-  };
+    ResultValue<int&> lvalue_ref_int_result{integer_lvalue_ref};
+    CHECK((std::is_same<decltype(lvalue_ref_int_result.value), int&>::value));
 
-  ResultValue<int>        int_result(integer);
-  CHECK((std::is_same<decltype(int_result.value), int>::value));
+    ResultValue<int const&> lvalue_cref_int_result{integer_lvalue_cref};
+    CHECK((std::is_same<decltype(lvalue_cref_int_result.value),
+                        int const&>::value));
 
-  ResultValue<int&>       lvalue_ref_int_result(integer_lvalue_ref);
-  CHECK((std::is_same<decltype(lvalue_ref_int_result.value), int&>::value));
+    ResultValue<int> rvalue_int_result{std::move(integer_lvalue_ref)};
+    CHECK((std::is_same<decltype(rvalue_int_result.value), int>::value));
 
-  ResultValue<int const&> lvalue_cref_int_result(integer_lvalue_cref);
-  CHECK((std::is_same<decltype(lvalue_cref_int_result.value), int const&>::value));
+    ResultValue<int*> int_ptr_result{integer_ptr};
+    CHECK((std::is_same<decltype(int_ptr_result.value), int*>::value));
 
-  ResultValue<int> rvalue_int_result(std::move(integer_lvalue_ref));
-  CHECK((std::is_same<decltype(rvalue_int_result.value), int>::value));
+    ResultValue<std::string> string_result{str};
+    ResultValue<std::string> string_move_result{std::move(str)};
 
-  ResultValue<int*> int_ptr_result(integer_ptr);
-  CHECK((std::is_same<decltype(int_ptr_result.value), int*>::value));
+    ResultValue<no_move> no_move_result{no_move{}};
 
-  ResultValue<std::string> string_result{str};
-  ResultValue<std::string> string_move_result{std::move(str)};
-
-  ResultValue<no_move>  no_move_result(no_move{});
-
-  function_b();
-
-}
-
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief generate tests
-////////////////////////////////////////////////////////////////////////////////
-
+    function_b();
+  }
 }
 
 // Local Variables:
 // mode: outline-minor
-// outline-regexp: "^\\(/// @brief\\|/// {@inheritDoc}\\|/// @addtogroup\\|// --SECTION--\\|/// @\\}\\)"
-// End:
+// outline-regexp: "^\\(/// @brief\\|/// {@inheritDoc}\\|/// @addtogroup\\|//
+// --SECTION--\\|/// @\\}\\)" End:
