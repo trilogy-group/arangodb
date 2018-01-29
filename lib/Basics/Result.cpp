@@ -25,7 +25,7 @@
 #include "Result.h"
 #include "Basics/Common.h"
 
-using namespace arangodb;
+namespace arangodb {
 
 Result::Result() noexcept : _errorNumber(TRI_ERROR_NO_ERROR) {}
 
@@ -100,9 +100,7 @@ bool Result::fail() const { return !ok(); }
 bool Result::is(int errorNumber) const { return _errorNumber == errorNumber; }
 bool Result::isNot(int errorNumber) const { return !is(errorNumber); }
 
-Result& Result::reset() {
-  return reset(TRI_ERROR_NO_ERROR);
-}
+Result& Result::reset() { return reset(TRI_ERROR_NO_ERROR); }
 
 Result& Result::reset(int errorNumber) {
   _errorNumber = errorNumber;
@@ -135,3 +133,5 @@ Result& Result::reset(Result&& other) noexcept {
   _errorMessage = std::move(other._errorMessage);
   return *this;
 }
+
+}  // namespace arangodb

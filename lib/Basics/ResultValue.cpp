@@ -23,9 +23,14 @@
 #include "Basics/ResultValue.h"
 
 #include <utility>
-using namespace arangodb::basics;
+
+namespace arangodb {
+namespace basics {
 
 template class ResultValue<int>;
 template class ResultValue<int*>;
 
 template class ResultValue<std::string>;
+
+}  // namespace basics
+}  // namespace arangodb
