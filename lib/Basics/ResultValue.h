@@ -42,13 +42,13 @@ class ResultValue {
   using BaseValueType = typename std::remove_const<
       typename std::remove_reference<ValueType>::type>::type;
 
-  static constexpr bool kAllowCopyConstructor =
+  static constexpr bool kAllowCopyConstruction =
       std::is_copy_constructible<ValueType>::value;
 
   static constexpr bool kAllowCopyAssignment =
       std::is_copy_assignable<ValueType>::value;
 
-  static constexpr bool kAllowMoveConstructor =
+  static constexpr bool kAllowMoveConstruction =
       std::is_move_constructible<ValueType>::value;
 
   static constexpr bool kAllowMoveAssignment =
@@ -72,7 +72,7 @@ class ResultValue {
       std::is_move_constructible<BaseValueType>::value;
 
  public:
-  template <bool x = kAllowCopyConstructor,
+  template <bool x = kAllowCopyConstruction,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(ResultValue<ValueType> const& other);
 
@@ -80,7 +80,7 @@ class ResultValue {
             typename std::enable_if<x>::type* = nullptr>
   ResultValue& operator=(ResultValue<ValueType> const& other);
 
-  template <bool x = kAllowMoveConstructor,
+  template <bool x = kAllowMoveConstruction,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(ResultValue<ValueType>&& other);
 
