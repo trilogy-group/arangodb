@@ -97,24 +97,48 @@ TEST_CASE("ResultTest", "[string]") {
 
     ResultValue<int> int_result{integer};
     CHECK((std::is_same<decltype(int_result.value), int>::value));
+    CHECK((int_result.value == integer));
+
+    ResultValue<int> int_result_from_ref{integer_lvalue_ref};
+    CHECK((std::is_same<decltype(int_result.value), int>::value));
+    CHECK((int_result.value == integer));
+
+    ResultValue<int> int_result_from_cref{integer_lvalue_cref};
+    CHECK((std::is_same<decltype(int_result.value), int>::value));
+    CHECK((int_result.value == integer));
 
     ResultValue<int&> lvalue_ref_int_result{integer_lvalue_ref};
     CHECK((std::is_same<decltype(lvalue_ref_int_result.value), int&>::value));
+    CHECK((lvalue_ref_int_result.value == integer_lvalue_ref));
+    CHECK((lvalue_ref_int_result.value == integer));
 
     ResultValue<int const&> lvalue_cref_int_result{integer_lvalue_cref};
     CHECK((std::is_same<decltype(lvalue_cref_int_result.value),
                         int const&>::value));
+    CHECK((lvalue_cref_int_result.value == integer_lvalue_cref));
+    CHECK((lvalue_cref_int_result.value == integer));
 
-    ResultValue<int> rvalue_int_result{std::move(integer_lvalue_ref)};
+    ResultValue<int> rvalue_int_result{std::move(integer)};
     CHECK((std::is_same<decltype(rvalue_int_result.value), int>::value));
+    CHECK((rvalue_int_result.value == integer));
 
     ResultValue<int*> int_ptr_result{integer_ptr};
     CHECK((std::is_same<decltype(int_ptr_result.value), int*>::value));
+    CHECK((int_ptr_result.value == integer_ptr));
+    CHECK((*(int_ptr_result.value) == integer));
 
     ResultValue<std::string> string_result{str};
+    CHECK((string_result.value == str));
+    CHECK(("arangodb rocks" == str));
+
     ResultValue<std::string> string_move_result{std::move(str)};
+    CHECK((str.empty()));
+    CHECK((string_move_result.value == "arangodb rocks"));
 
     ResultValue<no_move> no_move_result{no_move{}};
+
+    no_copy nc{};
+    ResultValue<no_copy> no_copy_result{std::move(nc)};
 
     function_b();
   }

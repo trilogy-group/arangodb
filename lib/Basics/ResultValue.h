@@ -38,28 +38,56 @@ class ResultValue {
   ValueType value;
 
  private:
-   // define some local type traits to help with constructor declaration
+  // define some local type traits to help with constructor declaration
   using BaseValueType = typename std::remove_const<
       typename std::remove_reference<ValueType>::type>::type;
+
+  static constexpr bool kAllowCopyConstructor =
+      std::is_copy_constructible<ValueType>::value;
+
+  static constexpr bool kAllowCopyAssignment =
+      std::is_copy_assignable<ValueType>::value;
+
+  static constexpr bool kAllowMoveConstructor =
+      std::is_move_constructible<ValueType>::value;
+
+  static constexpr bool kAllowMoveAssignment =
+      std::is_move_assignable<ValueType>::value;
 
   static constexpr bool kAllowDefaultConstruction =
       std::is_default_constructible<ValueType>::value;
 
-  static constexpr bool kAllowConstructionFromNonConstRef =
+  static constexpr bool kAllowConstructionFromBaseNonConstRef =
       std::is_lvalue_reference<ValueType>::value ||
       std::is_copy_constructible<BaseValueType>::value;
 
-  static constexpr bool kAllowConstructionFromConstRef =
+  static constexpr bool kAllowConstructionFromBaseConstRef =
       (std::is_lvalue_reference<ValueType>::value &&
        std::is_const<typename std::remove_reference<ValueType>::type>::value) ||
       (!std::is_reference<ValueType>::value &&
        std::is_copy_constructible<BaseValueType>::value);
 
-  static constexpr bool kAllowConstructionFromTemporary =
+  static constexpr bool kAllowConstructionFromBaseTemporary =
       !std::is_reference<ValueType>::value &&
       std::is_move_constructible<BaseValueType>::value;
 
  public:
+  template <bool x = kAllowCopyConstructor,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(ResultValue<ValueType> const& other);
+
+  template <bool x = kAllowCopyAssignment,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue& operator=(ResultValue<ValueType> const& other);
+
+  template <bool x = kAllowMoveConstructor,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(ResultValue<ValueType>&& other);
+
+  template <bool x = kAllowMoveAssignment,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue& operator=(ResultValue<ValueType>&& other);
+
   template <bool x = kAllowDefaultConstruction,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue() noexcept(
@@ -74,29 +102,41 @@ class ResultValue {
   ResultValue(Result&& result) noexcept(
       std::is_nothrow_default_constructible<ValueType>::value);
 
-  template <bool x = kAllowConstructionFromNonConstRef,
+  template <bool x = kAllowConstructionFromBaseNonConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType& value);
 
-  template <bool x = kAllowConstructionFromNonConstRef,
+  template <bool x = kAllowConstructionFromBaseNonConstRef,
             typename std::enable_if<x>::type* = nullptr>
-  ResultValue(BaseValueType& value, Result result);
+  ResultValue(BaseValueType& value, Result const& result);
 
-  template <bool x = kAllowConstructionFromConstRef,
+  template <bool x = kAllowConstructionFromBaseNonConstRef,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(BaseValueType& value, Result&& result);
+
+  template <bool x = kAllowConstructionFromBaseConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType const& value);
 
-  template <bool x = kAllowConstructionFromConstRef,
+  template <bool x = kAllowConstructionFromBaseConstRef,
             typename std::enable_if<x>::type* = nullptr>
-  ResultValue(BaseValueType const& value, Result result);
+  ResultValue(BaseValueType const& value, Result const& result);
 
-  template <bool x = kAllowConstructionFromTemporary,
+  template <bool x = kAllowConstructionFromBaseConstRef,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(BaseValueType const& value, Result&& result);
+
+  template <bool x = kAllowConstructionFromBaseTemporary,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType&& value);
 
-  template <bool x = kAllowConstructionFromTemporary,
+  template <bool x = kAllowConstructionFromBaseTemporary,
             typename std::enable_if<x>::type* = nullptr>
-  ResultValue(BaseValueType&& value, Result result);
+  ResultValue(BaseValueType&& value, Result const& result);
+
+  template <bool x = kAllowConstructionFromBaseTemporary,
+            typename std::enable_if<x>::type* = nullptr>
+  ResultValue(BaseValueType&& value, Result&& result);
 
   // TODO add more constructors
 
@@ -133,6 +173,34 @@ class ResultValue {
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(ResultValue<ValueType> const& other)
+    : value{other.value}, _result{other._result} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>& ResultValue<ValueType>::operator=(
+    ResultValue<ValueType> const& other) {
+  value = other.value;
+  _result = other._result;
+  return *this;
+}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(ResultValue<ValueType>&& other)
+    : value{std::move(other.value)}, _result{std::move(other._result)} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>& ResultValue<ValueType>::operator=(
+    ResultValue<ValueType>&& other) {
+  value = std::move(other.value);
+  _result = std::move(other._result);
+  return *this;
+}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
 ResultValue<ValueType>::ResultValue() noexcept(
     std::is_nothrow_default_constructible<ValueType>::value)
     : value{}, _result{} {}
@@ -154,8 +222,13 @@ ResultValue<ValueType>::ResultValue(BaseValueType& v) : value{v}, _result{} {}
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
-ResultValue<ValueType>::ResultValue(BaseValueType& v, Result result)
+ResultValue<ValueType>::ResultValue(BaseValueType& v, Result const& result)
     : value{v}, _result{result} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(BaseValueType& v, Result&& result)
+    : value{v}, _result{std::move(result)} {}
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
@@ -164,8 +237,14 @@ ResultValue<ValueType>::ResultValue(BaseValueType const& v)
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
-ResultValue<ValueType>::ResultValue(BaseValueType const& v, Result result)
+ResultValue<ValueType>::ResultValue(BaseValueType const& v,
+                                    Result const& result)
     : value{v}, _result{result} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(BaseValueType const& v, Result&& result)
+    : value{v}, _result{std::move(result)} {}
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
@@ -174,8 +253,13 @@ ResultValue<ValueType>::ResultValue(BaseValueType&& v)
 
 template <typename ValueType>
 template <bool x, typename std::enable_if<x>::type*>
-ResultValue<ValueType>::ResultValue(BaseValueType&& v, Result result)
+ResultValue<ValueType>::ResultValue(BaseValueType&& v, Result const& result)
     : value{std::move(v)}, _result{result} {}
+
+template <typename ValueType>
+template <bool x, typename std::enable_if<x>::type*>
+ResultValue<ValueType>::ResultValue(BaseValueType&& v, Result&& result)
+    : value{std::move(v)}, _result{std::move(result)} {}
 
 template <typename ValueType>
 int ResultValue<ValueType>::errorNumber() const {
