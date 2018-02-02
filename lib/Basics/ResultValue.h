@@ -38,103 +38,95 @@ class ResultValue {
   ValueType value;
 
  private:
-  // define some local type traits to help with constructor declaration
+  // derive the base type to help disambiguate template type deduction
   using BaseValueType = typename std::remove_const<
       typename std::remove_reference<ValueType>::type>::type;
 
-  static constexpr bool kAllowCopyConstruction =
-      std::is_copy_constructible<ValueType>::value;
+  // define some local type traits to help with constructor declaration
 
-  static constexpr bool kAllowCopyAssignment =
-      std::is_copy_assignable<ValueType>::value;
-
-  static constexpr bool kAllowMoveConstruction =
-      std::is_move_constructible<ValueType>::value;
-
-  static constexpr bool kAllowMoveAssignment =
-      std::is_move_assignable<ValueType>::value;
-
-  static constexpr bool kAllowDefaultConstruction =
-      std::is_default_constructible<ValueType>::value;
-
-  static constexpr bool kAllowConstructionFromBaseNonConstRef =
+  static constexpr bool AllowConstructionFromBaseNonConstRef =
+      // either we hold a non-const ref
       std::is_lvalue_reference<ValueType>::value ||
-      std::is_copy_constructible<BaseValueType>::value;
-
-  static constexpr bool kAllowConstructionFromBaseConstRef =
-      (std::is_lvalue_reference<ValueType>::value &&
-       std::is_const<typename std::remove_reference<ValueType>::type>::value) ||
+      // or we will actually copy the value
       (!std::is_reference<ValueType>::value &&
        std::is_copy_constructible<BaseValueType>::value);
 
-  static constexpr bool kAllowConstructionFromBaseTemporary =
+  static constexpr bool AllowConstructionFromBaseConstRef =
+      // either we will hold a const&
+      (std::is_same<ValueType, BaseValueType const&>::value) ||
+      // or we will actually copy the value
+      (!std::is_reference<ValueType>::value &&
+       std::is_copy_constructible<BaseValueType>::value);
+
+  static constexpr bool AllowConstructionFromBaseTemporary =
+      // we are not a ref and we can move the base value
       !std::is_reference<ValueType>::value &&
       std::is_move_constructible<BaseValueType>::value;
 
  public:
-  template <bool x = kAllowCopyConstruction,
+  template <bool x = std::is_copy_constructible<ValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(ResultValue<ValueType> const& other);
 
-  template <bool x = kAllowCopyAssignment,
+  template <bool x = std::is_copy_assignable<ValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue& operator=(ResultValue<ValueType> const& other);
 
-  template <bool x = kAllowMoveConstruction,
+  template <bool x = std::is_move_constructible<ValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(ResultValue<ValueType>&& other);
 
-  template <bool x = kAllowMoveAssignment,
+  template <bool x = std::is_move_assignable<ValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue& operator=(ResultValue<ValueType>&& other);
 
-  template <bool x = kAllowDefaultConstruction,
+  template <bool x = std::is_default_constructible<ValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue() noexcept(
       std::is_nothrow_default_constructible<ValueType>::value);
 
-  template <bool x = kAllowDefaultConstruction,
+  template <bool x = std::is_default_constructible<ValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(Result const& result);
 
-  template <bool x = kAllowDefaultConstruction,
+  template <bool x = std::is_default_constructible<ValueType>::value,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(Result&& result) noexcept(
       std::is_nothrow_default_constructible<ValueType>::value);
 
-  template <bool x = kAllowConstructionFromBaseNonConstRef,
+  template <bool x = AllowConstructionFromBaseNonConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType& value);
 
-  template <bool x = kAllowConstructionFromBaseNonConstRef,
+  template <bool x = AllowConstructionFromBaseNonConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType& value, Result const& result);
 
-  template <bool x = kAllowConstructionFromBaseNonConstRef,
+  template <bool x = AllowConstructionFromBaseNonConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType& value, Result&& result);
 
-  template <bool x = kAllowConstructionFromBaseConstRef,
+  template <bool x = AllowConstructionFromBaseConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType const& value);
 
-  template <bool x = kAllowConstructionFromBaseConstRef,
+  template <bool x = AllowConstructionFromBaseConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType const& value, Result const& result);
 
-  template <bool x = kAllowConstructionFromBaseConstRef,
+  template <bool x = AllowConstructionFromBaseConstRef,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType const& value, Result&& result);
 
-  template <bool x = kAllowConstructionFromBaseTemporary,
+  template <bool x = AllowConstructionFromBaseTemporary,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType&& value);
 
-  template <bool x = kAllowConstructionFromBaseTemporary,
+  template <bool x = AllowConstructionFromBaseTemporary,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType&& value, Result const& result);
 
-  template <bool x = kAllowConstructionFromBaseTemporary,
+  template <bool x = AllowConstructionFromBaseTemporary,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType&& value, Result&& result);
 

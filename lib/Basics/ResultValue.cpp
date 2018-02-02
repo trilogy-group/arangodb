@@ -22,10 +22,20 @@
 
 #include "Basics/ResultValue.h"
 
-#include <utility>
-
 namespace arangodb {
 namespace basics {
+
+/* NOTE: All parameter types T for which we explicitly instantiate
+ * ResultValue<T> must be
+ *  - default constructible,
+ *  - copy constructible,
+ *  - move constructible,
+ *  - copy assignable,
+ *  - and move assignable.
+ * This rules out, among others, any reference types. If any of these properties
+ * do not hold, or the instantiation will not be reused, simply fall back to
+ * implicit instantiation.
+ */
 
 template class ResultValue<int>;
 template class ResultValue<int*>;
