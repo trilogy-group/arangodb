@@ -32,6 +32,8 @@
 namespace arangodb {
 namespace basics {
 
+// TODO documentation, sorry :(
+
 template <typename ValueType>
 class ResultValue {
  public:
@@ -129,10 +131,6 @@ class ResultValue {
   template <bool x = AllowConstructionFromBaseTemporary,
             typename std::enable_if<x>::type* = nullptr>
   ResultValue(BaseValueType&& value, Result&& result);
-
-  // TODO add more constructors
-
-  // TODO define assignment operators
 
   // forward to matching Result methods
 

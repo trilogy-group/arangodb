@@ -25,6 +25,8 @@
 /// @author Dan Larkin-York
 ////////////////////////////////////////////////////////////////////////////////
 
+// TODO separate and more complete testing of both Result and ResultValue
+
 #include "Basics/Result.h"
 #include "Basics/ResultValue.h"
 
