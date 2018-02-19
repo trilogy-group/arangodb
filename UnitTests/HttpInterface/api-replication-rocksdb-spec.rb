@@ -470,7 +470,7 @@ describe ArangoDB do
             document["cid"].should eq(cid)
             document["data"]["_key"].should eq("test")
             document["data"]["_rev"].should match(/^[a-zA-Z0-9_\-]+$/)
-            document["data"]["_rev"].should_not eq(rev)
+            document["data"]["_rev"].should eq(rev)
 
             i = i + 1
           elsif i == 3 and document["type"] == 2001 and document["cid"] == cid
@@ -1591,7 +1591,7 @@ describe ArangoDB do
             document["cid"].should eq(cid)
             document["data"]["_key"].should eq("test")
             document["data"]["_rev"].should match(/^[a-zA-Z0-9_\-]+$/)
-            document["data"]["_rev"].should_not eq(rev)
+            document["data"]["_rev"].should eq(rev)
 
             i = i + 1
           elsif i == 3 and document["type"] == 2001 and document["cid"] == cid

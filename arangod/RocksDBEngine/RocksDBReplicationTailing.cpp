@@ -411,7 +411,7 @@ public:
     _builder.add("tid", VPackValue(std::to_string(_currentTrxId)));
     _builder.add("data", VPackValue(VPackValueType::Object));
     _builder.add(StaticStrings::KeyString, VPackValue(_removeDocumentKey));
-    _builder.add(StaticStrings::RevString, VPackValue(std::to_string(revId)));
+    _builder.add(StaticStrings::RevString, VPackValue(TRI_RidToString(revId)));
     _builder.close();
     _builder.close();
     _removeDocumentKey.clear();

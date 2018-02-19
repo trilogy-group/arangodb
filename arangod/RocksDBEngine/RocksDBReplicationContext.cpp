@@ -330,7 +330,7 @@ arangodb::Result RocksDBReplicationContext::dumpKeys(
 
     b.openArray();
     b.add(VPackValuePair(key.data(), key.size(), VPackValueType::String));
-    b.add(VPackValue(std::to_string(rt.revisionId())));
+    b.add(VPackValue(TRI_RidToString(rt.revisionId())));
     b.close();
   };
 
