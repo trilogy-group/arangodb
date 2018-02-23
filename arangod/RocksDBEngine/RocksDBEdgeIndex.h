@@ -125,6 +125,9 @@ class RocksDBEdgeIndex final : public RocksDBIndex {
   double selectivityEstimateLocal(
       arangodb::StringRef const* = nullptr) const override;
 
+  RocksDBCuckooIndexEstimator<uint64_t>* estimator() override;
+  bool needToPersistEstimate() const override;
+
   void toVelocyPack(VPackBuilder&, bool, bool) const override;
 
   void batchInsert(
@@ -157,23 +160,22 @@ class RocksDBEdgeIndex final : public RocksDBIndex {
   void warmup(arangodb::transaction::Methods* trx,
               std::shared_ptr<basics::LocalTaskQueue> queue) override;
 
-  void serializeEstimate(std::string& output) const override;
+  rocksdb::SequenceNumber serializeEstimate(
+      std::string& output, rocksdb::SequenceNumber seq) const override;
 
-  bool deserializeEstimate(arangodb::RocksDBCounterManager* mgr) override;
+  bool deserializeEstimate(arangodb::RocksDBSettingsManager* mgr) override;
 
   void recalculateEstimates() override;
 
-  Result insertInternal(transaction::Methods*, RocksDBMethods*, 
+  Result insertInternal(transaction::Methods*, RocksDBMethods*,
                         LocalDocumentId const& documentId,
-                        arangodb::velocypack::Slice const&) override;
+                        arangodb::velocypack::Slice const&,
+                        OperationMode mode) override;
 
-  Result removeInternal(transaction::Methods*, RocksDBMethods*, 
+  Result removeInternal(transaction::Methods*, RocksDBMethods*,
                         LocalDocumentId const& documentId,
-                        arangodb::velocypack::Slice const&) override;
-
- protected:
-  Result postprocessRemove(transaction::Methods* trx, rocksdb::Slice const& key,
-                           rocksdb::Slice const& value) override;
+                        arangodb::velocypack::Slice const&,
+                        OperationMode mode) override;
 
  private:
   /// @brief create the iterator
@@ -188,14 +190,14 @@ class RocksDBEdgeIndex final : public RocksDBIndex {
   /// @brief add a single value node to the iterator's keys
   void handleValNode(VPackBuilder* keys,
                      arangodb::aql::AstNode const* valNode) const;
-  
+
   void warmupInternal(transaction::Methods* trx,
                       rocksdb::Slice const& lower, rocksdb::Slice const& upper);
-  
+
  private:
 
-  std::string _directionAttr;
-  bool _isFromIndex;
+  std::string const _directionAttr;
+  bool const _isFromIndex;
 
   /// @brief A fixed size library to estimate the selectivity of the index.
   /// On insertion of a document we have to insert it into the estimator,

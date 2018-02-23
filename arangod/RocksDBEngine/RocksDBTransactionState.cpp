@@ -31,25 +31,24 @@
 #include "RestServer/TransactionManagerFeature.h"
 #include "RocksDBEngine/RocksDBCollection.h"
 #include "RocksDBEngine/RocksDBCommon.h"
-#include "RocksDBEngine/RocksDBCounterManager.h"
 #include "RocksDBEngine/RocksDBEngine.h"
 #include "RocksDBEngine/RocksDBLogValue.h"
 #include "RocksDBEngine/RocksDBMethods.h"
+#include "RocksDBEngine/RocksDBSettingsManager.h"
 #include "RocksDBEngine/RocksDBTransactionCollection.h"
-#include "StorageEngine/EngineSelectorFeature.h"
 #include "StorageEngine/StorageEngine.h"
 #include "StorageEngine/TransactionCollection.h"
 #include "StorageEngine/TransactionManager.h"
 #include "Transaction/Methods.h"
+#include "Utils/ExecContext.h"
 #include "VocBase/LogicalCollection.h"
-#include "VocBase/modes.h"
 #include "VocBase/ticks.h"
 
-#include <rocksdb/db.h>
 #include <rocksdb/options.h>
 #include <rocksdb/status.h>
 #include <rocksdb/utilities/optimistic_transaction_db.h>
 #include <rocksdb/utilities/transaction.h>
+#include <rocksdb/utilities/transaction_db.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 
 using namespace arangodb;
@@ -61,10 +60,13 @@ struct RocksDBTransactionData final : public TransactionData {};
 RocksDBTransactionState::RocksDBTransactionState(
     TRI_vocbase_t* vocbase, transaction::Options const& options)
     : TransactionState(vocbase, options),
+      _rocksTransaction(nullptr),
       _snapshot(nullptr),
       _rocksWriteOptions(),
       _rocksReadOptions(),
       _cacheTx(nullptr),
+      _numCommits(0),
+      _numInternal(0),
       _numInserts(0),
       _numUpdates(0),
       _numRemoves(0),
@@ -74,17 +76,7 @@ RocksDBTransactionState::RocksDBTransactionState(
 
 /// @brief free a transaction container
 RocksDBTransactionState::~RocksDBTransactionState() {
-  if (_cacheTx != nullptr) {
-    // note: endTransaction() will delete _cacheTrx!
-    CacheManagerFeature::MANAGER->endTransaction(_cacheTx);
-    _cacheTx = nullptr;
-  }
-  if (_snapshot != nullptr) {
-    rocksdb::TransactionDB* db = rocksutils::globalRocksDB();
-    db->ReleaseSnapshot(_snapshot);
-    _snapshot = nullptr;
-  }
-
+  cleanupTransaction();
   for (auto& it : _keys) {
     delete it;
   }
@@ -92,16 +84,18 @@ RocksDBTransactionState::~RocksDBTransactionState() {
 
 /// @brief start a transaction
 Result RocksDBTransactionState::beginTransaction(transaction::Hints hints) {
-  LOG_TRX(this, _nestingLevel) << "beginning " << AccessMode::typeString(_type)
-                               << " transaction";
+  LOG_TRX(this, _nestingLevel)
+      << "beginning " << AccessMode::typeString(_type) << " transaction";
 
+
+  TRI_ASSERT(!hasHint(transaction::Hints::Hint::NO_USAGE_LOCK) || !AccessMode::isWriteOrExclusive(_type));
+  
   if (_nestingLevel == 0) {
     // set hints
     _hints = hints;
   }
 
   Result result = useCollections(_nestingLevel);
-
   if (result.ok()) {
     // all valid
     if (_nestingLevel == 0) {
@@ -123,9 +117,8 @@ Result RocksDBTransactionState::beginTransaction(transaction::Hints hints) {
     // get a new id
     _id = TRI_NewTickServer();
 
-    // register a protector
-    auto data =
-        std::make_unique<RocksDBTransactionData>();  // intentionally empty
+    // register a protector (intentionally empty)
+    auto data = std::make_unique<RocksDBTransactionData>();
     TransactionManagerFeature::manager()->registerTransaction(_id,
                                                               std::move(data));
 
@@ -137,18 +130,23 @@ Result RocksDBTransactionState::beginTransaction(transaction::Hints hints) {
         CacheManagerFeature::MANAGER->beginTransaction(isReadOnlyTransaction());
 
     rocksdb::TransactionDB* db = rocksutils::globalRocksDB();
-    _rocksReadOptions.prefix_same_as_start = true; // should always be true
+    _rocksReadOptions.prefix_same_as_start = true;  // should always be true
 
     if (isReadOnlyTransaction()) {
-      // we must call ReleaseSnapshot at some point
-      _snapshot = db->GetSnapshot();
-      _rocksReadOptions.snapshot = _snapshot;
+      // server wide replication may insert a snapshot
+      if (_snapshot == nullptr) {
+        // we must call ReleaseSnapshot at some point
+        _snapshot = db->GetSnapshot();
+      }
       TRI_ASSERT(_snapshot != nullptr);
+      _rocksReadOptions.snapshot = _snapshot;
       _rocksMethods.reset(new RocksDBReadOnlyMethods(this));
     } else {
+      TRI_ASSERT(_snapshot == nullptr);
       createTransaction();
-      bool readWrites = hasHint(transaction::Hints::Hint::READ_OWN_WRITES);
-      if (!readWrites) {
+      if (hasHint(transaction::Hints::Hint::SINGLE_OPERATION)) {
+        _rocksReadOptions.snapshot = _rocksTransaction->GetSnapshot();
+      } else {
         TRI_ASSERT(_options.intermediateCommitCount != UINT64_MAX ||
                    _options.intermediateCommitSize != UINT64_MAX);
         // we must call ReleaseSnapshot at some point
@@ -156,10 +154,11 @@ Result RocksDBTransactionState::beginTransaction(transaction::Hints hints) {
         _rocksReadOptions.snapshot = _snapshot;
         TRI_ASSERT(_snapshot != nullptr);
       }
+      TRI_ASSERT(_rocksReadOptions.snapshot != nullptr);
 
       // under some circumstances we can use untracking Put/Delete methods,
       // but we need to be sure this does not cause any lost updates or other
-      // inconsistencies. 
+      // inconsistencies.
       // TODO: enable this optimization once these circumstances are clear
       // and fully covered by tests
       if (false && isExclusiveTransactionOnSingleCollection()) {
@@ -177,34 +176,76 @@ Result RocksDBTransactionState::beginTransaction(transaction::Hints hints) {
 
 // create a rocksdb transaction. will only be called for write transactions
 void RocksDBTransactionState::createTransaction() {
-  TRI_ASSERT(!_rocksTransaction);
   TRI_ASSERT(!isReadOnlyTransaction());
 
   // start rocks transaction
   rocksdb::TransactionDB* db = rocksutils::globalRocksDB();
   rocksdb::TransactionOptions trxOpts;
   trxOpts.set_snapshot = true;
-  trxOpts.deadlock_detect = !hasHint(transaction::Hints::Hint::NO_DLD);
-  
-  _rocksTransaction.reset(db->BeginTransaction(_rocksWriteOptions, trxOpts));
-  _rocksReadOptions.snapshot = _rocksTransaction->GetSnapshot();
-  TRI_ASSERT(_rocksReadOptions.snapshot != nullptr);
-  
-  // set begin marker
+  // unclear performance implications do not use for now
+  // trxOpts.deadlock_detect = !hasHint(transaction::Hints::Hint::NO_DLD);
+
+  TRI_ASSERT(_rocksTransaction == nullptr ||
+             _rocksTransaction->GetState() == rocksdb::Transaction::COMMITED ||
+             _rocksTransaction->GetState() == rocksdb::Transaction::ROLLEDBACK);
+  _rocksTransaction =
+      db->BeginTransaction(_rocksWriteOptions, trxOpts, _rocksTransaction);
+
+  // add transaction begin marker
   if (!hasHint(transaction::Hints::Hint::SINGLE_OPERATION)) {
     RocksDBLogValue header =
         RocksDBLogValue::BeginTransaction(_vocbase->id(), _id);
     _rocksTransaction->PutLogData(header.slice());
 #ifdef ARANGODB_ENABLE_MAINTAINER_MODE
+    TRI_ASSERT(_numLogdata == 0);
     ++_numLogdata;
 #endif
+  }
+  TRI_ASSERT(_lastUsedCollection == 0);
+}
+
+void RocksDBTransactionState::cleanupTransaction() noexcept {
+  delete _rocksTransaction;
+  _rocksTransaction = nullptr;
+  if (_cacheTx != nullptr) {
+    // note: endTransaction() will delete _cacheTrx!
+    CacheManagerFeature::MANAGER->endTransaction(_cacheTx);
+    _cacheTx = nullptr;
+  }
+  if (_snapshot != nullptr) {
+    rocksdb::TransactionDB* db = rocksutils::globalRocksDB();
+    db->ReleaseSnapshot(_snapshot);
+    _snapshot = nullptr;
   }
 }
 
 arangodb::Result RocksDBTransactionState::internalCommit() {
   TRI_ASSERT(_rocksTransaction != nullptr);
+#ifdef ARANGODB_ENABLE_MAINTAINER_MODE
+  uint64_t x = _numInserts + _numRemoves + _numUpdates;
+  if (hasHint(transaction::Hints::Hint::SINGLE_OPERATION)) {
+    TRI_ASSERT(x <= 1 && _numLogdata == x);
+  } else {
+    if (_numLogdata < 1 + (x > 0 ? 1 : 0) + _numRemoves) {
+      LOG_TOPIC(DEBUG, Logger::FIXME) << "_numInserts " << _numInserts << "  "
+                                      << "_numRemoves " << _numRemoves << "  "
+                                      << "_numUpdates " << _numUpdates << "  "
+                                      << "_numLogdata " << _numLogdata;
+    }
+    // begin transaction + n DocumentOpsPrologue + m doc removes
+    TRI_ASSERT(_numLogdata >= 1 + (x > 0 ? 1 : 0) + _numRemoves);
+  }
+#endif
 
-  arangodb::Result result;
+  ExecContext const* exe = ExecContext::CURRENT;
+  if (!isReadOnlyTransaction() && exe != nullptr) {
+    bool cancelRW = !ServerState::writeOpsEnabled() && !exe->isSuperuser();
+    if (exe->isCanceled() || cancelRW) {
+      return Result(TRI_ERROR_ARANGO_READ_ONLY, "server is in read-only mode");
+    }
+  }
+
+  Result result;
   if (_rocksTransaction->GetNumKeys() > 0) {
     // set wait for sync flag if required
     if (waitForSync()) {
@@ -212,73 +253,79 @@ arangodb::Result RocksDBTransactionState::internalCommit() {
       _rocksTransaction->SetWriteOptions(_rocksWriteOptions);
     }
 
-    // double t1 = TRI_microtime();
-    result = rocksutils::convertStatus(_rocksTransaction->Commit());
-    // double t2 = TRI_microtime();
-    // if (t2 - t1 > 0.25) {
-    //   LOG_TOPIC(ERR, Logger::FIXME)
-    //       << "COMMIT TOOK: " << (t2 - t1)
-    //       << " S. NUMINSERTS: " << _numInserts
-    //       << ", NUMUPDATES: " << _numUpdates
-    //       << ", NUMREMOVES: " << _numRemoves
-    //       << ", TRANSACTIONSIZE: " << _transactionSize;
-    // }
-    rocksdb::SequenceNumber latestSeq =
+    // prepare for commit on each collection, e.g. place blockers for estimators
+    rocksdb::SequenceNumber preCommitSeq =
         rocksutils::globalRocksDB()->GetLatestSequenceNumber();
-    if (!result.ok()) {
-      return result;
-    }
-
-    if (_cacheTx != nullptr) {
-      // note: endTransaction() will delete _cacheTx!
-      CacheManagerFeature::MANAGER->endTransaction(_cacheTx);
-      _cacheTx = nullptr;
-    }
-
     for (auto& trxCollection : _collections) {
       RocksDBTransactionCollection* collection =
           static_cast<RocksDBTransactionCollection*>(trxCollection);
-      int64_t adjustment = collection->numInserts() - collection->numRemoves();
-
-      if (collection->numInserts() != 0 || collection->numRemoves() != 0 ||
-          collection->revision() != 0) {
-        RocksDBCollection* coll = static_cast<RocksDBCollection*>(
-            trxCollection->collection()->getPhysical());
-        coll->adjustNumberDocuments(adjustment);
-        coll->setRevision(collection->revision());
-        RocksDBEngine* engine =
-            static_cast<RocksDBEngine*>(EngineSelectorFeature::ENGINE);
-
-        RocksDBCounterManager::CounterAdjustment update(
-            latestSeq, collection->numInserts(), collection->numRemoves(),
-            collection->revision());
-        engine->counterManager()->updateCounter(coll->objectId(), update);
+      collection->prepareCommit(id(), preCommitSeq);
+    }
+    bool committed = false;
+    auto cleanupCollectionTransactions = [this, &committed]() -> void {
+      // if we didn't commit, make sure we remove blockers, etc.
+      if (!committed) {
+        for (auto& trxCollection : _collections) {
+          RocksDBTransactionCollection* collection =
+              static_cast<RocksDBTransactionCollection*>(trxCollection);
+          collection->abortCommit(id());
+        }
       }
+    };
+    TRI_DEFER(cleanupCollectionTransactions());
 
-      // we need this in case of an intermediate commit. The number of
-      // initial documents is adjusted and numInserts / removes is set to 0
-      collection->commitCounts();
+    ++_numCommits;
+    result = rocksutils::convertStatus(_rocksTransaction->Commit());
+    rocksdb::SequenceNumber latestSeq =
+        rocksutils::globalRocksDB()->GetLatestSequenceNumber();
+
+    if (result.ok()) {
+      for (auto& trxCollection : _collections) {
+        RocksDBTransactionCollection* collection =
+            static_cast<RocksDBTransactionCollection*>(trxCollection);
+        int64_t adjustment =
+            collection->numInserts() - collection->numRemoves();
+
+        if (collection->numInserts() != 0 || collection->numRemoves() != 0 ||
+            collection->revision() != 0) {
+          RocksDBCollection* coll = static_cast<RocksDBCollection*>(
+              trxCollection->collection()->getPhysical());
+          coll->adjustNumberDocuments(adjustment);
+          coll->setRevision(collection->revision());
+
+          RocksDBEngine* engine = rocksutils::globalRocksEngine();
+          RocksDBSettingsManager::CounterAdjustment update(
+              latestSeq, collection->numInserts(), collection->numRemoves(),
+              collection->revision());
+          engine->settingsManager()->updateCounter(coll->objectId(), update);
+        }
+        // we need this in case of an intermediate commit. The number of
+        // initial documents is adjusted and numInserts / removes is set to 0
+        // index estimator updates are buffered
+        collection->commitCounts(id(), latestSeq);
+        committed = true;
+      }
     }
   } else {
+    for (auto& trxCollection : _collections) {
+      RocksDBTransactionCollection* collection =
+          static_cast<RocksDBTransactionCollection*>(trxCollection);
+      // We get here if we have filled indexes. So let us commit counts and
+      // any buffered index estimator updates
+      collection->commitCounts(id(), 0);
+    }
     // don't write anything if the transaction is empty
     result = rocksutils::convertStatus(_rocksTransaction->Rollback());
-
-    if (_cacheTx != nullptr) {
-      // note: endTransaction() will delete _cacheTx!
-      CacheManagerFeature::MANAGER->endTransaction(_cacheTx);
-      _cacheTx = nullptr;
-    }
   }
 
-  _rocksTransaction.reset();
   return result;
 }
 
 /// @brief commit a transaction
 Result RocksDBTransactionState::commitTransaction(
     transaction::Methods* activeTrx) {
-  LOG_TRX(this, _nestingLevel) << "committing " << AccessMode::typeString(_type)
-                               << " transaction";
+  LOG_TRX(this, _nestingLevel)
+      << "committing " << AccessMode::typeString(_type) << " transaction";
 
   TRI_ASSERT(_status == transaction::Status::RUNNING);
   TRI_IF_FAILURE("TransactionWriteCommitMarker") {
@@ -289,53 +336,45 @@ Result RocksDBTransactionState::commitTransaction(
   if (_nestingLevel == 0) {
     if (_rocksTransaction != nullptr) {
       res = internalCommit();
-      if (!res.ok()) {
-        abortTransaction(activeTrx);
-      }
     }
+
     if (res.ok()) {
       updateStatus(transaction::Status::COMMITTED);
+      cleanupTransaction();  // deletes trx
+    } else {
+      abortTransaction(activeTrx);  // deletes trx
     }
+    TRI_ASSERT(!_rocksTransaction && !_cacheTx && !_snapshot);
   }
 
   unuseCollections(_nestingLevel);
-
   return res;
 }
 
 /// @brief abort and rollback a transaction
 Result RocksDBTransactionState::abortTransaction(
     transaction::Methods* activeTrx) {
-  LOG_TRX(this, _nestingLevel) << "aborting " << AccessMode::typeString(_type)
-                               << " transaction";
+  LOG_TRX(this, _nestingLevel)
+      << "aborting " << AccessMode::typeString(_type) << " transaction";
   TRI_ASSERT(_status == transaction::Status::RUNNING);
   Result result;
-
   if (_nestingLevel == 0) {
     if (_rocksTransaction != nullptr) {
       rocksdb::Status status = _rocksTransaction->Rollback();
       result = rocksutils::convertStatus(status);
-
-      if (_cacheTx != nullptr) {
-        // note: endTransaction() will delete _cacheTx!
-        CacheManagerFeature::MANAGER->endTransaction(_cacheTx);
-        _cacheTx = nullptr;
-      }
-
-      _rocksTransaction.reset();
     }
+    cleanupTransaction();  // deletes trx
 
     updateStatus(transaction::Status::ABORTED);
-
     if (hasOperations()) {
       // must clean up the query cache because the transaction
       // may have queried something via AQL that is now rolled back
       clearQueryCache();
     }
+    TRI_ASSERT(!_rocksTransaction && !_cacheTx && !_snapshot);
   }
 
   unuseCollections(_nestingLevel);
-
   return result;
 }
 
@@ -394,11 +433,20 @@ void RocksDBTransactionState::prepareOperation(
       }
     }
   }
+
   // we need to log the remove log entry, if we don't have the single
   // optimization
-  if (!singleOp && operationType == TRI_VOC_DOCUMENT_OPERATION_REMOVE) {
-    RocksDBLogValue logValue = RocksDBLogValue::DocumentRemove(key);
-    _rocksTransaction->PutLogData(logValue.slice());
+  if (!singleOp && (operationType == TRI_VOC_DOCUMENT_OPERATION_UPDATE ||
+                    operationType == TRI_VOC_DOCUMENT_OPERATION_REPLACE ||
+                    operationType == TRI_VOC_DOCUMENT_OPERATION_REMOVE)) {
+    if (operationType == TRI_VOC_DOCUMENT_OPERATION_REMOVE) {
+      RocksDBLogValue logValue = RocksDBLogValue::DocumentRemove(key);
+      _rocksTransaction->PutLogData(logValue.slice());
+    } else {
+      RocksDBLogValue logValue =
+          RocksDBLogValue::DocumentRemoveAsPartOfUpdate(key);
+      _rocksTransaction->PutLogData(logValue.slice());
+    }
 #ifdef ARANGODB_ENABLE_MAINTAINER_MODE
     ++_numLogdata;
 #endif
@@ -410,8 +458,6 @@ RocksDBOperationResult RocksDBTransactionState::addOperation(
     TRI_voc_cid_t cid, TRI_voc_rid_t revisionId,
     TRI_voc_document_operation_e operationType, uint64_t operationSize,
     uint64_t keySize) {
-  RocksDBOperationResult res;
-
   size_t currentSize =
       _rocksTransaction->GetWriteBatch()->GetWriteBatch()->GetDataSize();
   uint64_t newSize = currentSize + operationSize + keySize;
@@ -420,8 +466,7 @@ RocksDBOperationResult RocksDBTransactionState::addOperation(
     std::string message =
         "aborting transaction because maximal transaction size limit of " +
         std::to_string(_options.maxTransactionSize) + " bytes is reached";
-    res.reset(TRI_ERROR_RESOURCE_LIMIT, message);
-    return res;
+    return RocksDBOperationResult(Result(TRI_ERROR_RESOURCE_LIMIT, message));
   }
 
   auto collection =
@@ -457,24 +502,32 @@ RocksDBOperationResult RocksDBTransactionState::addOperation(
       break;
   }
 
-  auto numOperations = _numInserts + _numUpdates + _numRemoves;
-  // perform an intermediate commit
-  // this will be done if either the "number of operations" or the
-  // "transaction size" counters have reached their limit
-  if (_options.intermediateCommitCount <= numOperations ||
-      _options.intermediateCommitSize <= newSize) {
-    // LOG_TOPIC(ERR, Logger::FIXME) << "INTERMEDIATE COMMIT!";
-    internalCommit();
-    _numInserts = 0;
-    _numUpdates = 0;
-    _numRemoves = 0;
-#ifdef ARANGODB_ENABLE_MAINTAINER_MODE
-    _numLogdata = 0;
-#endif
-    createTransaction();
+  // perform an intermediate commit if necessary
+  checkIntermediateCommit(newSize);
+
+  return RocksDBOperationResult();
+}
+
+/// @brief add an internal operation for a transaction
+RocksDBOperationResult RocksDBTransactionState::addInternalOperation(
+    uint64_t operationSize, uint64_t keySize) {
+  size_t currentSize =
+      _rocksTransaction->GetWriteBatch()->GetWriteBatch()->GetDataSize();
+  uint64_t newSize = currentSize + operationSize + keySize;
+  if (newSize > _options.maxTransactionSize) {
+    // we hit the transaction size limit
+    std::string message =
+        "aborting transaction because maximal transaction size limit of " +
+        std::to_string(_options.maxTransactionSize) + " bytes is reached";
+    return RocksDBOperationResult(Result(TRI_ERROR_RESOURCE_LIMIT, message));
   }
 
-  return res;
+  ++_numInternal;
+
+  // perform an intermediate commit if necessary
+  checkIntermediateCommit(newSize);
+
+  return RocksDBOperationResult();
 }
 
 RocksDBMethods* RocksDBTransactionState::rocksdbMethods() {
@@ -482,16 +535,76 @@ RocksDBMethods* RocksDBTransactionState::rocksdbMethods() {
   return _rocksMethods.get();
 }
 
+void RocksDBTransactionState::donateSnapshot(rocksdb::Snapshot const* snap) {
+  TRI_ASSERT(_snapshot == nullptr);
+  TRI_ASSERT(isReadOnlyTransaction());
+  TRI_ASSERT(_status == transaction::Status::CREATED);
+  _snapshot = snap;
+}
+
+rocksdb::Snapshot const* RocksDBTransactionState::stealSnapshot() {
+  TRI_ASSERT(_snapshot != nullptr);
+  TRI_ASSERT(isReadOnlyTransaction());
+  TRI_ASSERT(_status == transaction::Status::RUNNING);
+  rocksdb::Snapshot const* snap = _snapshot;
+  _snapshot = nullptr;
+  return snap;
+}
+
 uint64_t RocksDBTransactionState::sequenceNumber() const {
   if (_snapshot != nullptr) {
     return static_cast<uint64_t>(_snapshot->GetSequenceNumber());
-  } else {
+  } else if (_rocksTransaction) {
     return static_cast<uint64_t>(
         _rocksTransaction->GetSnapshot()->GetSequenceNumber());
   }
+  TRI_ASSERT(false);
+  THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "No snapshot set");
 }
 
-void RocksDBTransactionState::prepareForParallelReads() { _parallel = true; }
+void RocksDBTransactionState::triggerIntermediateCommit() {
+  TRI_IF_FAILURE("FailBeforeIntermediateCommit") {
+    THROW_ARANGO_EXCEPTION(TRI_ERROR_DEBUG);
+  }
+  TRI_IF_FAILURE("SegfaultBeforeIntermediateCommit") {
+    TRI_SegfaultDebugging("SegfaultBeforeIntermediateCommit");
+  }
+
+  TRI_ASSERT(!hasHint(transaction::Hints::Hint::SINGLE_OPERATION));
+#ifdef ARANGODB_ENABLE_MAINTAINER_MODE
+  LOG_TOPIC(DEBUG, Logger::ROCKSDB) << "INTERMEDIATE COMMIT!";
+#endif
+
+  internalCommit();
+
+  TRI_IF_FAILURE("FailAfterIntermediateCommit") {
+    THROW_ARANGO_EXCEPTION(TRI_ERROR_DEBUG);
+  }
+  TRI_IF_FAILURE("SegfaultAfterIntermediateCommit") {
+    TRI_SegfaultDebugging("SegfaultAfterIntermediateCommit");
+  }
+
+  _lastUsedCollection = 0;
+  _numInternal = 0;
+  _numInserts = 0;
+  _numUpdates = 0;
+  _numRemoves = 0;
+#ifdef ARANGODB_ENABLE_MAINTAINER_MODE
+  _numLogdata = 0;
+#endif
+  createTransaction();
+}
+
+void RocksDBTransactionState::checkIntermediateCommit(uint64_t newSize) {
+  auto numOperations = _numInserts + _numUpdates + _numRemoves + _numInternal;
+  // perform an intermediate commit
+  // this will be done if either the "number of operations" or the
+  // "transaction size" counters have reached their limit
+  if (_options.intermediateCommitCount <= numOperations ||
+      _options.intermediateCommitSize <= newSize) {
+    triggerIntermediateCommit();
+  }
+}
 
 /// @brief temporarily lease a Builder object
 RocksDBKey* RocksDBTransactionState::leaseRocksDBKey() {
@@ -518,11 +631,35 @@ void RocksDBTransactionState::returnRocksDBKey(RocksDBKey* key) {
   }
 }
 
+void RocksDBTransactionState::trackIndexInsert(TRI_voc_cid_t cid,
+                                               TRI_idx_iid_t idxId,
+                                               uint64_t hash) {
+  auto col = findCollection(cid);
+  if (col != nullptr) {
+    static_cast<RocksDBTransactionCollection*>(col)->trackIndexInsert(idxId,
+                                                                      hash);
+  } else {
+    TRI_ASSERT(false);
+  }
+}
+
+void RocksDBTransactionState::trackIndexRemove(TRI_voc_cid_t cid,
+                                               TRI_idx_iid_t idxId,
+                                               uint64_t hash) {
+  auto col = findCollection(cid);
+  if (col != nullptr) {
+    static_cast<RocksDBTransactionCollection*>(col)->trackIndexRemove(idxId,
+                                                                      hash);
+  } else {
+    TRI_ASSERT(false);
+  }
+}
+
 /// @brief constructor, leases a builder
 RocksDBKeyLeaser::RocksDBKeyLeaser(transaction::Methods* trx)
-      : _rtrx(RocksDBTransactionState::toState(trx)),
-        _parallel(_rtrx->inParallelMode()),
-        _key(_parallel ? &_internal : _rtrx->leaseRocksDBKey()) {
+    : _rtrx(RocksDBTransactionState::toState(trx)),
+      _parallel(_rtrx->inParallelMode()),
+      _key(_parallel ? &_internal : _rtrx->leaseRocksDBKey()) {
   TRI_ASSERT(_key != nullptr);
 }
 
@@ -532,4 +669,3 @@ RocksDBKeyLeaser::~RocksDBKeyLeaser() {
     _rtrx->returnRocksDBKey(_key);
   }
 }
-

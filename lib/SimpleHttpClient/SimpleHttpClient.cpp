@@ -34,6 +34,9 @@
 #include <velocypack/Parser.h>
 #include <velocypack/velocypack-aliases.h>
 
+#include <thread>
+#include <chrono>
+
 using namespace arangodb;
 using namespace arangodb::basics;
 
@@ -60,8 +63,8 @@ SimpleHttpClient::SimpleHttpClient(GeneralClientConnection* connection,
       _errorMessage(""),
       _nextChunkedSize(0),
       _method(rest::RequestType::GET),
-      _result(nullptr)
- {
+      _result(nullptr),
+      _aborted(false) {
   TRI_ASSERT(connection != nullptr);
 
   if (_connection->isConnected()) {
@@ -93,6 +96,11 @@ SimpleHttpClient::~SimpleHttpClient() {
 // -----------------------------------------------------------------------------
 // public methods
 // -----------------------------------------------------------------------------
+   
+void SimpleHttpClient::setAborted(bool value) noexcept {
+  _aborted.store(value, std::memory_order_release);
+  setInterrupted(value);
+}
 
 void SimpleHttpClient::setInterrupted(bool value) {
   if (_connection != nullptr) {
@@ -152,7 +160,7 @@ SimpleHttpResult* SimpleHttpClient::retryRequest(
     std::unordered_map<std::string, std::string> const& headers) {
   SimpleHttpResult* result = nullptr;
   size_t tries = 0;
-
+  
   while (true) {
     TRI_ASSERT(result == nullptr);
 
@@ -166,15 +174,22 @@ SimpleHttpResult* SimpleHttpClient::retryRequest(
     result = nullptr;
 
     if (tries++ >= _params._maxRetries) {
+      LOG_TOPIC(WARN, arangodb::Logger::HTTPCLIENT) << "" << _params._retryMessage
+      << " - no retries left";
+      break;
+    }
+    
+    if (isAborted()) {
       break;
     }
 
     if (!_params._retryMessage.empty() && (_params._maxRetries - tries) > 0) {
-      LOG_TOPIC(WARN, arangodb::Logger::FIXME) << "" << _params._retryMessage
+      LOG_TOPIC(WARN, arangodb::Logger::HTTPCLIENT) << "" << _params._retryMessage
                 << " - retries left: " << (_params._maxRetries - tries);
     }
 
-    usleep(static_cast<TRI_usleep_t>(_params._retryWaitTime));
+    // 1 microsecond == 10^-6 seconds
+    std::this_thread::sleep_for(std::chrono::microseconds(_params._retryWaitTime));
   }
 
   return result;
@@ -381,6 +396,10 @@ SimpleHttpResult* SimpleHttpClient::doRequest(
     }
 
     remainingTime = endTime - TRI_microtime();
+    if (isAborted()) {
+      setErrorMessage("Client request aborted");
+      break;
+    }
   }
 
   if (_state < FINISHED && _errorMessage.empty()) {
@@ -479,7 +498,7 @@ void SimpleHttpClient::setRequest(
     rest::RequestType method, std::string const& location, char const* body,
     size_t bodyLength,
     std::unordered_map<std::string, std::string> const& headers) {
-  // clear read-buffer (no pipeling!)
+  // clear read-buffer (no pipelining!)
   _readBufferOffset = 0;
   _readBuffer.reset();
 
@@ -497,7 +516,8 @@ void SimpleHttpClient::setRequest(
 
   std::string appended;
   if (location.empty() || location[0] != '/') {
-    appended = "/" + location;
+    appended.reserve(1 + location.size());
+    appended = '/' + location;
     l = &appended;
   }
 
@@ -508,7 +528,9 @@ void SimpleHttpClient::setRequest(
 
   // append hostname
   std::string hostname = _connection->getEndpoint()->host();
-
+  
+  LOG_TOPIC(DEBUG, Logger::HTTPCLIENT) << "request to " << hostname << ": " << GeneralRequest::translateMethod(method) << ' ' << *l;
+  
   _writeBuffer.appendText(TRI_CHAR_LENGTH_PAIR("Host: "));
   _writeBuffer.appendText(hostname);
   _writeBuffer.appendText(TRI_CHAR_LENGTH_PAIR("\r\n"));
@@ -562,8 +584,7 @@ void SimpleHttpClient::setRequest(
 
   _writeBuffer.ensureNullTerminated();
 
-  LOG_TOPIC(TRACE, arangodb::Logger::FIXME) << "Request: "
-             << std::string(_writeBuffer.c_str(), _writeBuffer.length());
+  LOG_TOPIC(TRACE, arangodb::Logger::HTTPCLIENT) << "request: " << _writeBuffer;
 
   if (_state == DEAD) {
     _connection->resetNumConnectRetries();
@@ -780,7 +801,6 @@ void SimpleHttpClient::processChunkedHeader() {
   if (*pos == '\r') {
     ++_readBufferOffset;
     TRI_ASSERT(_readBufferOffset <= _readBuffer.length());
-    ++len;
   }
 
   // empty lines are an error
@@ -886,8 +906,8 @@ std::string SimpleHttpClient::getHttpErrorMessage(
 
     VPackSlice slice = builder->slice();
     if (slice.isObject()) {
-      VPackSlice msg = slice.get("errorMessage");
-      int errorNum = slice.get("errorNum").getNumericValue<int>();
+      VPackSlice msg = slice.get(StaticStrings::ErrorMessage);
+      int errorNum = slice.get(StaticStrings::ErrorNum).getNumericValue<int>();
 
       if (msg.isString() && msg.getStringLength() > 0 && errorNum > 0) {
         if (errorCode != nullptr) {

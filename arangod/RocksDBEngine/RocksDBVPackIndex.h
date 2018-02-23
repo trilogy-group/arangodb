@@ -56,7 +56,7 @@ namespace transaction {
 class Methods;
 }
 
-/// @brief Iterator structure for RocksDB unique index. 
+/// @brief Iterator structure for RocksDB unique index.
 /// This iterator can be used only for equality lookups that use all
 /// index attributes. It uses a point lookup and no seeks
 class RocksDBVPackUniqueIndexIterator final : public IndexIterator {
@@ -100,7 +100,7 @@ class RocksDBVPackIndexIterator final : public IndexIterator {
                             transaction::Methods* trx,
                             ManagedDocumentResult* mmdr,
                             arangodb::RocksDBVPackIndex const* index,
-                            bool reverse, 
+                            bool reverse,
                             RocksDBKeyBounds&& bounds);
 
   ~RocksDBVPackIndexIterator() = default;
@@ -145,6 +145,9 @@ class RocksDBVPackIndex : public RocksDBIndex {
   double selectivityEstimateLocal(
       arangodb::StringRef const* = nullptr) const override;
 
+  RocksDBCuckooIndexEstimator<uint64_t>* estimator() override;
+  bool needToPersistEstimate() const override;
+
   void toVelocyPack(VPackBuilder&, bool, bool) const override;
 
   bool allowExpansion() const override { return true; }
@@ -188,29 +191,30 @@ class RocksDBVPackIndex : public RocksDBIndex {
   arangodb::aql::AstNode* specializeCondition(
       arangodb::aql::AstNode*, arangodb::aql::Variable const*) const override;
 
-  void serializeEstimate(std::string& output) const override;
+  rocksdb::SequenceNumber serializeEstimate(
+      std::string& output, rocksdb::SequenceNumber seq) const override;
 
-  bool deserializeEstimate(arangodb::RocksDBCounterManager* mgr) override;
+  bool deserializeEstimate(arangodb::RocksDBSettingsManager* mgr) override;
 
   void recalculateEstimates() override;
 
  protected:
   Result insertInternal(transaction::Methods*, RocksDBMethods*,
                         LocalDocumentId const& documentId,
-                        arangodb::velocypack::Slice const&) override;
-  
+                        arangodb::velocypack::Slice const&,
+                        OperationMode mode) override;
+
   Result updateInternal(transaction::Methods* trx, RocksDBMethods*,
                         LocalDocumentId const& oldDocumentId,
                         arangodb::velocypack::Slice const& oldDoc,
                         LocalDocumentId const& newDocumentId,
-                        velocypack::Slice const& newDoc) override;
+                        velocypack::Slice const& newDoc,
+                        OperationMode mode) override;
 
-  Result removeInternal(transaction::Methods*, RocksDBMethods*, 
+  Result removeInternal(transaction::Methods*, RocksDBMethods*,
                         LocalDocumentId const& documentId,
-                        arangodb::velocypack::Slice const&) override;
-
-  Result postprocessRemove(transaction::Methods* trx, rocksdb::Slice const& key,
-                           rocksdb::Slice const& value) override;
+                        arangodb::velocypack::Slice const&,
+                        OperationMode mode) override;
 
  private:
   bool isDuplicateOperator(arangodb::aql::AstNode const*,

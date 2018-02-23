@@ -270,13 +270,12 @@ struct ClusterCommResult {
         dynamic_cast<HttpResponse*>(response.get())->body().c_str(),
         dynamic_cast<HttpResponse*>(response.get())->body().length(), std::unordered_map<std::string,std::string>());
 
-    auto headers = response->headers();
+    auto const& headers = response->headers();
     auto errorCodes = headers.find(StaticStrings::ErrorCodes);
     if (errorCodes != headers.end()) {
       request->setHeader(StaticStrings::ErrorCodes, errorCodes->second);
     }
-    request->setHeader("x-arango-response-code",
-                       GeneralResponse::responseString(answer_code));
+    request->setHeader(StaticStrings::ResponseCode, GeneralResponse::responseString(answer_code));
     answer.reset(request);
     TRI_ASSERT(response != nullptr);
     result = std::make_shared<httpclient::SimpleHttpCommunicatorResult>(
@@ -304,7 +303,7 @@ struct ClusterCommResult {
 
 struct ClusterCommCallback {
   ClusterCommCallback() {}
-  virtual ~ClusterCommCallback(){};
+  virtual ~ClusterCommCallback() {}
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief the actual callback function
@@ -393,7 +392,8 @@ class ClusterComm {
   //////////////////////////////////////////////////////////////////////////////
 
  public:
-  ~ClusterComm();
+
+  virtual ~ClusterComm();
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief get the unique instance
@@ -442,7 +442,7 @@ class ClusterComm {
   /// @brief submit an HTTP request to a shard asynchronously.
   //////////////////////////////////////////////////////////////////////////////
 
-  OperationID asyncRequest(
+  virtual OperationID asyncRequest(
       ClientTransactionID const& clientTransactionID,
       CoordTransactionID const coordTransactionID,
       std::string const& destination, rest::RequestType reqtype,
@@ -474,19 +474,19 @@ class ClusterComm {
   /// @brief wait for one answer matching the criteria
   //////////////////////////////////////////////////////////////////////////////
 
-  ClusterCommResult const wait(ClientTransactionID const& clientTransactionID,
-                               CoordTransactionID const coordTransactionID,
-                               OperationID const operationID,
-                               ShardID const& shardID,
-                               ClusterCommTimeout timeout = 0.0);
+  virtual ClusterCommResult const wait(ClientTransactionID const& clientTransactionID,
+                                       CoordTransactionID const coordTransactionID,
+                                       OperationID const operationID,
+                                       ShardID const& shardID,
+                                       ClusterCommTimeout timeout = 0.0);
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief ignore and drop current and future answers matching
   //////////////////////////////////////////////////////////////////////////////
 
-  void drop(ClientTransactionID const& clientTransactionID,
-            CoordTransactionID const coordTransactionID,
-            OperationID const operationID, ShardID const& shardID);
+  virtual void drop(ClientTransactionID const& clientTransactionID,
+                    CoordTransactionID const coordTransactionID,
+                    OperationID const operationID, ShardID const& shardID);
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief send an answer HTTP request to a coordinator
@@ -529,15 +529,20 @@ class ClusterComm {
 
   void addAuthorization(std::unordered_map<std::string, std::string>* headers);
 
-  std::string jwt() { return _jwt; };
-
   //////////////////////////////////////////////////////////////////////////////
-  /// @brief abort and disable all communication 
+  /// @brief abort and disable all communication
   //////////////////////////////////////////////////////////////////////////////
 
   void disable();
-  
- private:
+
+ protected:  // protected members are for unit test purposes
+
+  /// @brief Constructor for test cases.
+  explicit ClusterComm(bool);
+
+  // code below this point used to be "private".  now "protected" to
+  //  enable unit test wrapper class
+
   size_t performSingleRequest(std::vector<ClusterCommRequest>& requests,
                               ClusterCommTimeout timeout, size_t& nrDone,
                               arangodb::LogTopic const& logTopic);
@@ -655,7 +660,6 @@ class ClusterComm {
 
   std::shared_ptr<communicator::Communicator> _communicator;
   bool _authenticationEnabled;
-  std::string _jwt;
   std::string _jwtAuthorization;
 
 };

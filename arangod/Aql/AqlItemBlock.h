@@ -109,7 +109,7 @@ class AqlItemBlock {
     if (value.requiresDestruction()) {
       if (++_valueCount[value] == 1) {
         mem = value.memoryUsage();
-        increaseMemoryUsage(value.memoryUsage());
+        increaseMemoryUsage(mem);
       }
     }
 
@@ -120,7 +120,7 @@ class AqlItemBlock {
       throw;
     }
   }
-  
+
   /// @brief emplaceValue, set the current value of a register, constructing
   /// it in place
   template <typename... Args>
@@ -129,7 +129,6 @@ class AqlItemBlock {
     TRI_ASSERT(_data[index * _nrRegs + varNr].isEmpty());
 
     void* p = &_data[index * _nrRegs + varNr];
-    size_t mem = 0;
     // construct the AqlValue in place
     AqlValue* value;
     try {
@@ -144,15 +143,13 @@ class AqlItemBlock {
       // Now update the reference count, if this fails, we'll roll it back
       if (value->requiresDestruction()) {
         if (++_valueCount[*value] == 1) {
-          mem = value->memoryUsage();
-          increaseMemoryUsage(mem);
+          increaseMemoryUsage(value->memoryUsage());
         }
       }
     } catch (...) {
       // invoke dtor
       value->~AqlValue();
 
-      decreaseMemoryUsage(mem);
       _data[index * _nrRegs + varNr].destroy();
       throw;
     }
@@ -225,7 +222,7 @@ class AqlItemBlock {
   
   void copyColValuesFromFirstRow(size_t currentRow, RegisterId col) {
     TRI_ASSERT(currentRow > 0);
-    TRI_ASSERT(_data.capacity() > currentRow * _nrRegs + col);
+    TRI_ASSERT(_data.size() > currentRow * _nrRegs + col);
 
     if (_data[currentRow * _nrRegs + col].isEmpty()) {
       // First update the reference count, if this fails, the value is empty
@@ -238,6 +235,12 @@ class AqlItemBlock {
 
   void copyValuesFromFirstRow(size_t currentRow, RegisterId curRegs) {
     TRI_ASSERT(currentRow > 0);
+
+    if (curRegs == 0) {
+      // nothing to do
+      return;
+    }
+    TRI_ASSERT(_data.size() > currentRow * _nrRegs + curRegs);
 
     for (RegisterId i = 0; i < curRegs; i++) {
       if (_data[currentRow * _nrRegs + i].isEmpty()) {

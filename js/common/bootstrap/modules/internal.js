@@ -303,7 +303,7 @@ global.DEFINE_MODULE('internal', (function () {
     exports.download = global.SYS_DOWNLOAD;
     delete global.SYS_DOWNLOAD;
   }
-  
+
   if (global.SYS_CLUSTER_DOWNLOAD) {
     exports.clusterDownload = global.SYS_CLUSTER_DOWNLOAD;
     delete global.SYS_CLUSTER_DOWNLOAD;
@@ -462,7 +462,7 @@ global.DEFINE_MODULE('internal', (function () {
   }
 
   // //////////////////////////////////////////////////////////////////////////////
-  // / @brief input 
+  // / @brief input
   // //////////////////////////////////////////////////////////////////////////////
 
   if (global.SYS_POLLSTDIN) {
@@ -598,6 +598,14 @@ global.DEFINE_MODULE('internal', (function () {
   }
 
   // //////////////////////////////////////////////////////////////////////////////
+  // / @brief wait for index selectivity estimate sync
+  // //////////////////////////////////////////////////////////////////////////////
+  if (global.WAIT_FOR_ESTIMATOR_SYNC) {
+    exports.waitForEstimatorSync = global.WAIT_FOR_ESTIMATOR_SYNC;
+    delete global.WAIT_FOR_ESTIMATOR_SYNC;
+  }
+
+  // //////////////////////////////////////////////////////////////////////////////
   // / @brief importCsvFile
   // //////////////////////////////////////////////////////////////////////////////
 
@@ -707,51 +715,6 @@ global.DEFINE_MODULE('internal', (function () {
   }
 
   // //////////////////////////////////////////////////////////////////////////////
-  // / @brief createQueue
-  // //////////////////////////////////////////////////////////////////////////////
-
-  if (global.SYS_CREATE_QUEUE) {
-    exports.createQueue = global.SYS_CREATE_QUEUE;
-    delete global.SYS_CREATE_QUEUE;
-  }
-
-  // //////////////////////////////////////////////////////////////////////////////
-  // / @brief deleteQueue
-  // //////////////////////////////////////////////////////////////////////////////
-
-  if (global.SYS_DELETE_QUEUE) {
-    exports.deleteQueue = global.SYS_DELETE_QUEUE;
-    delete global.SYS_DELETE_QUEUE;
-  }
-
-  // //////////////////////////////////////////////////////////////////////////////
-  // / @brief registerTask
-  // //////////////////////////////////////////////////////////////////////////////
-
-  if (global.SYS_REGISTER_TASK) {
-    exports.registerTask = global.SYS_REGISTER_TASK;
-    delete global.SYS_REGISTER_TASK;
-  }
-
-  // //////////////////////////////////////////////////////////////////////////////
-  // / @brief unregisterTask
-  // //////////////////////////////////////////////////////////////////////////////
-
-  if (global.SYS_UNREGISTER_TASK) {
-    exports.unregisterTask = global.SYS_UNREGISTER_TASK;
-    delete global.SYS_UNREGISTER_TASK;
-  }
-
-  // //////////////////////////////////////////////////////////////////////////////
-  // / @brief getTasks
-  // //////////////////////////////////////////////////////////////////////////////
-
-  if (global.SYS_GET_TASK) {
-    exports.getTask = global.SYS_GET_TASK;
-    delete global.SYS_GET_TASK;
-  }
-
-  // //////////////////////////////////////////////////////////////////////////////
   // / @brief testPort
   // //////////////////////////////////////////////////////////////////////////////
 
@@ -820,7 +783,7 @@ global.DEFINE_MODULE('internal', (function () {
             if (structure[key] !== false) {
               if (structure[key] !== true) {
                 if (structure[key] !== null) {
-                  // The null case is for the case one wants to add an option 
+                  // The null case is for the case one wants to add an option
                   // with an equals sign all in the key, which is necessary if
                   // one wants to specify an option multiple times.
                   vec.push(structure[key]);
@@ -1293,7 +1256,7 @@ global.DEFINE_MODULE('internal', (function () {
             if (context.level > 0 && !showFunction) {
               var a = s.split('\n');
               var f = a[0].replace(/^(.*?\)).*$/, '$1');
-              
+
               var m = funcRE.exec(f);
 
               if (m !== null) {

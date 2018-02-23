@@ -22,6 +22,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "RestImportHandler.h"
+#include "Basics/NumberUtils.h"
 #include "Basics/StaticStrings.h"
 #include "Basics/StringUtils.h"
 #include "Basics/VelocyPackHelper.h"
@@ -48,7 +49,8 @@ using namespace arangodb::rest;
 RestImportHandler::RestImportHandler(GeneralRequest* request,
                                      GeneralResponse* response)
     : RestVocbaseBaseHandler(request, response),
-      _onDuplicateAction(DUPLICATE_ERROR) {}
+      _onDuplicateAction(DUPLICATE_ERROR),
+      _ignoreMissing(false) {}
 
 RestStatus RestImportHandler::execute() {
   // set default value for onDuplicate
@@ -358,9 +360,8 @@ bool RestImportHandler::createFromJson(std::string const& type) {
   }
 
   // find and load collection given by name or identifier
-  SingleCollectionTransaction trx(
-      transaction::StandaloneContext::Create(_vocbase), collectionName,
-      AccessMode::Type::WRITE);
+  auto ctx = transaction::StandaloneContext::Create(_vocbase);
+  SingleCollectionTransaction trx(ctx, collectionName, AccessMode::Type::WRITE);
 
   // .............................................................................
   // inside write transaction
@@ -564,9 +565,8 @@ bool RestImportHandler::createFromVPack(std::string const& type) {
   }
 
   // find and load collection given by name or identifier
-  SingleCollectionTransaction trx(
-      transaction::StandaloneContext::Create(_vocbase), collectionName,
-      AccessMode::Type::WRITE);
+  auto ctx = transaction::StandaloneContext::Create(_vocbase);
+  SingleCollectionTransaction trx(ctx, collectionName, AccessMode::Type::WRITE);
 
   // .............................................................................
   // inside write transaction
@@ -657,6 +657,7 @@ bool RestImportHandler::createFromKeyValueList() {
 
   bool const complete = extractBooleanParameter("complete", false);
   bool const overwrite = extractBooleanParameter("overwrite", false);
+  _ignoreMissing = extractBooleanParameter("ignoreMissing", false);
   OperationOptions opOptions;
   opOptions.waitForSync = extractBooleanParameter("waitForSync", false);
 
@@ -677,7 +678,7 @@ bool RestImportHandler::createFromKeyValueList() {
   std::string const& lineNumValue = _request->value("line", found);
 
   if (found) {
-    lineNumber = StringUtils::int64(lineNumValue);
+    lineNumber = NumberUtils::atoi_zero<int64_t>(lineNumValue.data(), lineNumValue.data() + lineNumValue.size());
   }
 
   HttpRequest* httpRequest = dynamic_cast<HttpRequest*>(_request.get());
@@ -745,9 +746,8 @@ bool RestImportHandler::createFromKeyValueList() {
   current = next + 1;
 
   // find and load collection given by name or identifier
-  SingleCollectionTransaction trx(
-      transaction::StandaloneContext::Create(_vocbase), collectionName,
-      AccessMode::Type::WRITE);
+  auto ctx = transaction::StandaloneContext::Create(_vocbase);
+  SingleCollectionTransaction trx(ctx, collectionName, AccessMode::Type::WRITE);
 
   // .............................................................................
   // inside write transaction
@@ -871,11 +871,11 @@ bool RestImportHandler::createFromKeyValueList() {
 /// @brief perform the actual import (insert/update/replace) operations
 ////////////////////////////////////////////////////////////////////////////////
 
-int RestImportHandler::performImport(SingleCollectionTransaction& trx,
-                                     RestImportResult& result,
-                                     std::string const& collectionName,
-                                     VPackBuilder const& babies, bool complete,
-                                     OperationOptions const& opOptions) {
+Result RestImportHandler::performImport(SingleCollectionTransaction& trx,
+                                        RestImportResult& result,
+                                        std::string const& collectionName,
+                                        VPackBuilder const& babies, bool complete,
+                                        OperationOptions const& opOptions) {
   auto makeError = [&](size_t i, int res, VPackSlice const& slice,
                        RestImportResult& result) {
     VPackOptions options(VPackOptions::Defaults);
@@ -905,13 +905,13 @@ int RestImportHandler::performImport(SingleCollectionTransaction& trx,
     updateReplace.openArray();
     size_t pos = 0;
 
-    for (auto const& it : VPackArrayIterator(resultSlice)) {
-      if (!it.hasKey("error") || !it.get("error").getBool()) {
+    for (VPackSlice it : VPackArrayIterator(resultSlice)) {
+      if (!it.hasKey(StaticStrings::Error) || !it.get(StaticStrings::Error).getBool()) {
         ++result._numCreated;
       } else {
         // got an error, now handle it
 
-        int errorCode = it.get("errorNum").getNumber<int>();
+        int errorCode = it.get(StaticStrings::ErrorNum).getNumber<int>();
         VPackSlice const which = babies.slice().at(pos);
         // special behavior in case of unique constraint violation . . .
         if (errorCode == TRI_ERROR_ARANGO_UNIQUE_CONSTRAINT_VIOLATED &&
@@ -960,18 +960,18 @@ int RestImportHandler::performImport(SingleCollectionTransaction& trx,
             trx.replace(collectionName, updateReplace.slice(), opOptions);
       }
 
-      if (opResult.failed() && res.ok()) {
-        res = opResult.code;
+      if (opResult.fail() && res.ok()) {
+        res = opResult.result;
       }
 
       VPackSlice resultSlice = opResult.slice();
       if (resultSlice.isArray()) {
         size_t pos = 0;
         for (auto const& it : VPackArrayIterator(resultSlice)) {
-          if (!it.hasKey("error") || !it.get("error").getBool()) {
+          if (!it.hasKey(StaticStrings::Error) || !it.get(StaticStrings::Error).getBool()) {
             ++result._numUpdated;
           } else {
-            int errorCode = it.get("errorNum").getNumber<int>();
+            int errorCode = it.get(StaticStrings::ErrorNum).getNumber<int>();
 
             if (errorCode == TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND) {
               // "not found" can only occur when the original insert did not
@@ -992,11 +992,11 @@ int RestImportHandler::performImport(SingleCollectionTransaction& trx,
     }
   }
   
-  if (opResult.failed() && res.ok()) {
-    res = opResult.code;
+  if (opResult.fail() && res.ok()) {
+    res = opResult.result;
   }
 
-  return res.errorNumber();
+  return res;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1010,7 +1010,7 @@ void RestImportHandler::generateDocumentsCreated(
   try {
     VPackBuilder json;
     json.add(VPackValue(VPackValueType::Object));
-    json.add("error", VPackValue(false));
+    json.add(StaticStrings::Error, VPackValue(false));
     json.add("created", VPackValue(result._numCreated));
     json.add("errors", VPackValue(result._numErrors));
     json.add("empty", VPackValue(result._numEmpty));
@@ -1073,7 +1073,7 @@ void RestImportHandler::createVelocyPackObject(
   VPackArrayIterator itKeys(keys);
   VPackArrayIterator itValues(values);
  
-  if (itKeys.size() != itValues.size()) { 
+  if (!_ignoreMissing && itKeys.size() != itValues.size()) { 
     errorMsg = positionize(lineNumber) + "wrong number of JSON values (got " +
                std::to_string(itValues.size()) + ", expected " + std::to_string(itKeys.size()) + ")";
     THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_BAD_PARAMETER, errorMsg);
@@ -1082,8 +1082,9 @@ void RestImportHandler::createVelocyPackObject(
   result.openObject();
 
   while (itKeys.valid()) {
-    TRI_ASSERT(itValues.valid());
-
+    if (!itValues.valid()) {
+      break;
+    }
     VPackSlice const key = itKeys.value();
     VPackSlice const value = itValues.value();
 

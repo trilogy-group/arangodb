@@ -22,6 +22,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "mmfiles-replication-dump.h"
+#include "mmfiles-replication-common.h"
 #include "Basics/ReadLocker.h"
 #include "Basics/StaticStrings.h"
 #include "Basics/StringRef.h"
@@ -39,6 +40,7 @@
 #include <velocypack/velocypack-aliases.h>
 
 using namespace arangodb;
+using namespace arangodb::mmfilesutils;
 
 /// @brief append values to a string buffer
 static void Append(MMFilesReplicationDumpContext* dump, uint64_t value) {
@@ -57,14 +59,22 @@ static void Append(MMFilesReplicationDumpContext* dump, char const* value) {
   }
 }
 
+static void Append(MMFilesReplicationDumpContext* dump, std::string const& value) {
+  int res = TRI_AppendString2StringBuffer(dump->_buffer, value.c_str(), value.size());
+
+  if (res != TRI_ERROR_NO_ERROR) {
+    THROW_ARANGO_EXCEPTION(res);
+  }
+}
+
 /// @brief translate a (local) collection id into a collection name
-static char const* NameFromCid(MMFilesReplicationDumpContext* dump,
-                               TRI_voc_cid_t cid) {
+static std::string const& nameFromCid(MMFilesReplicationDumpContext* dump,
+                                      TRI_voc_cid_t cid) {
   auto it = dump->_collectionNames.find(cid);
 
   if (it != dump->_collectionNames.end()) {
     // collection name is in cache already
-    return (*it).second.c_str();
+    return (*it).second;
   }
 
   // collection name not in cache yet
@@ -74,80 +84,15 @@ static char const* NameFromCid(MMFilesReplicationDumpContext* dump,
     // insert into cache
     try {
       dump->_collectionNames.emplace(cid, std::move(name));
+      // and look it up again
+      return nameFromCid(dump, cid);
     } catch (...) {
-      return nullptr;
+      // fall through to returning empty string
     }
 
-    // and look it up again
-    return NameFromCid(dump, cid);
   }
 
-  return nullptr;
-}
-
-/// @brief whether or not a marker should be replicated
-static inline bool MustReplicateWalMarkerType(MMFilesMarker const* marker) {
-  MMFilesMarkerType type = marker->getType();
-  return (type == TRI_DF_MARKER_VPACK_DOCUMENT ||
-          type == TRI_DF_MARKER_VPACK_REMOVE ||
-          type == TRI_DF_MARKER_VPACK_BEGIN_TRANSACTION ||
-          type == TRI_DF_MARKER_VPACK_COMMIT_TRANSACTION ||
-          type == TRI_DF_MARKER_VPACK_ABORT_TRANSACTION ||
-          type == TRI_DF_MARKER_VPACK_CREATE_COLLECTION ||
-          type == TRI_DF_MARKER_VPACK_DROP_COLLECTION ||
-          type == TRI_DF_MARKER_VPACK_RENAME_COLLECTION ||
-          type == TRI_DF_MARKER_VPACK_CHANGE_COLLECTION ||
-          type == TRI_DF_MARKER_VPACK_CREATE_INDEX ||
-          type == TRI_DF_MARKER_VPACK_DROP_INDEX ||
-          type == TRI_DF_MARKER_VPACK_CREATE_VIEW ||
-          type == TRI_DF_MARKER_VPACK_DROP_VIEW ||
-          type == TRI_DF_MARKER_VPACK_CHANGE_VIEW);
-}
-
-/// @brief whether or not a marker belongs to a transaction
-static inline bool IsTransactionWalMarkerType(MMFilesMarker const* marker) {
-  MMFilesMarkerType type = marker->getType();
-  return (type == TRI_DF_MARKER_VPACK_BEGIN_TRANSACTION ||
-          type == TRI_DF_MARKER_VPACK_COMMIT_TRANSACTION ||
-          type == TRI_DF_MARKER_VPACK_ABORT_TRANSACTION);
-}
-
-/// @brief translate a marker type to a replication type
-static TRI_replication_operation_e TranslateType(
-    MMFilesMarker const* marker) {
-  switch (marker->getType()) {
-    case TRI_DF_MARKER_VPACK_DOCUMENT:
-      return REPLICATION_MARKER_DOCUMENT;
-    case TRI_DF_MARKER_VPACK_REMOVE:
-      return REPLICATION_MARKER_REMOVE;
-    case TRI_DF_MARKER_VPACK_BEGIN_TRANSACTION:
-      return REPLICATION_TRANSACTION_START;
-    case TRI_DF_MARKER_VPACK_COMMIT_TRANSACTION:
-      return REPLICATION_TRANSACTION_COMMIT;
-    case TRI_DF_MARKER_VPACK_ABORT_TRANSACTION:
-      return REPLICATION_TRANSACTION_ABORT;
-    case TRI_DF_MARKER_VPACK_CREATE_COLLECTION:
-      return REPLICATION_COLLECTION_CREATE;
-    case TRI_DF_MARKER_VPACK_DROP_COLLECTION:
-      return REPLICATION_COLLECTION_DROP;
-    case TRI_DF_MARKER_VPACK_RENAME_COLLECTION:
-      return REPLICATION_COLLECTION_RENAME;
-    case TRI_DF_MARKER_VPACK_CHANGE_COLLECTION:
-      return REPLICATION_COLLECTION_CHANGE;
-    case TRI_DF_MARKER_VPACK_CREATE_INDEX:
-      return REPLICATION_INDEX_CREATE;
-    case TRI_DF_MARKER_VPACK_DROP_INDEX:
-      return REPLICATION_INDEX_DROP;
-    case TRI_DF_MARKER_VPACK_CREATE_VIEW:
-      return REPLICATION_VIEW_CREATE;
-    case TRI_DF_MARKER_VPACK_DROP_VIEW:
-      return REPLICATION_VIEW_DROP;
-    case TRI_DF_MARKER_VPACK_CHANGE_VIEW:
-      return REPLICATION_VIEW_CHANGE;
-
-    default:
-      return REPLICATION_INVALID;
-  }
+  return StaticStrings::Empty;
 }
 
 /// @brief stringify a raw marker from a logfile for a log dump or logger
@@ -157,46 +102,18 @@ static int StringifyMarker(MMFilesReplicationDumpContext* dump,
                            TRI_voc_cid_t collectionId,
                            MMFilesMarker const* marker, bool isDump,
                            bool withTicks, bool isEdgeCollection) {
-  TRI_ASSERT(MustReplicateWalMarkerType(marker));
+  TRI_ASSERT(MustReplicateWalMarkerType(marker, false));
   MMFilesMarkerType const type = marker->getType();
 
   if (!isDump) {
     // logger-follow command
     Append(dump, "{\"tick\":\"");
     Append(dump, static_cast<uint64_t>(marker->getTick()));
+    Append(dump, "\",\"type\":");
+    Append(dump, static_cast<uint64_t>(TranslateType(marker)));
     // for debugging use the following
     // Append(dump, "\",\"typeName\":\"");
     // Append(dump, TRI_NameMarkerDatafile(marker));
-
-    if (dump->_compat28 && (type == TRI_DF_MARKER_VPACK_DOCUMENT ||
-                            type == TRI_DF_MARKER_VPACK_REMOVE)) {
-      // 2.8-compatible format
-      VPackSlice slice(reinterpret_cast<char const*>(marker) +
-                       MMFilesDatafileHelper::VPackOffset(type));
-      arangodb::basics::VPackStringBufferAdapter adapter(dump->_buffer);
-      VPackDumper dumper(
-          &adapter,
-          &dump->_vpackOptions);  // note: we need the CustomTypeHandler here
-
-      // additionally dump "key" and "rev" attributes on the top-level
-      Append(dump, "\",\"key\":");
-      dumper.dump(slice.get(StaticStrings::KeyString));
-      if (slice.hasKey(StaticStrings::RevString)) {
-        Append(dump, ",\"rev\":");
-        dumper.dump(slice.get(StaticStrings::RevString));
-      }
-      // convert 2300 markers to 2301 markers for edges
-      Append(dump, ",\"type\":");
-      if (type == TRI_DF_MARKER_VPACK_DOCUMENT && isEdgeCollection) {
-        Append(dump, 2301);
-      } else {
-        Append(dump, static_cast<uint64_t>(TranslateType(marker)));
-      }
-    } else {
-      // 3.0 dump
-      Append(dump, "\",\"type\":");
-      Append(dump, static_cast<uint64_t>(TranslateType(marker)));
-    }
 
     if (type == TRI_DF_MARKER_VPACK_DOCUMENT ||
         type == TRI_DF_MARKER_VPACK_REMOVE ||
@@ -219,9 +136,9 @@ static int StringifyMarker(MMFilesReplicationDumpContext* dump,
         Append(dump, collectionId);
         Append(dump, "\"");
         // also include collection name
-        char const* cname = NameFromCid(dump, collectionId);
+        std::string const& cname = nameFromCid(dump, collectionId);
 
-        if (cname != nullptr) {
+        if (!cname.empty()) {
           Append(dump, ",\"cname\":\"");
           Append(dump, cname);
           Append(dump, "\"");
@@ -238,34 +155,8 @@ static int StringifyMarker(MMFilesReplicationDumpContext* dump,
       Append(dump, "{");
     }
 
-    if (dump->_compat28 && (type == TRI_DF_MARKER_VPACK_DOCUMENT ||
-                            type == TRI_DF_MARKER_VPACK_REMOVE)) {
-      // 2.8-compatible format
-      VPackSlice slice(reinterpret_cast<char const*>(marker) +
-                       MMFilesDatafileHelper::VPackOffset(type));
-      arangodb::basics::VPackStringBufferAdapter adapter(dump->_buffer);
-      VPackDumper dumper(
-          &adapter,
-          &dump->_vpackOptions);  // note: we need the CustomTypeHandler here
-
-      // additionally dump "key" and "rev" attributes on the top-level
-      Append(dump, "\"key\":");
-      dumper.dump(slice.get(StaticStrings::KeyString));
-      if (slice.hasKey(StaticStrings::RevString)) {
-        Append(dump, ",\"rev\":");
-        dumper.dump(slice.get(StaticStrings::RevString));
-      }
-      // convert 2300 markers to 2301 markers for edges
-      Append(dump, ",\"type\":");
-      if (type == TRI_DF_MARKER_VPACK_DOCUMENT && isEdgeCollection) {
-        Append(dump, 2301);
-      } else {
-        Append(dump, static_cast<uint64_t>(TranslateType(marker)));
-      }
-    } else {
-      Append(dump, "\"type\":");
-      Append(dump, static_cast<uint64_t>(TranslateType(marker)));
-    }
+    Append(dump, "\"type\":");
+    Append(dump, static_cast<uint64_t>(TranslateType(marker)));
   }
 
   switch (type) {
@@ -277,6 +168,7 @@ static int StringifyMarker(MMFilesReplicationDumpContext* dump,
     case TRI_DF_MARKER_VPACK_CREATE_VIEW:
     case TRI_DF_MARKER_VPACK_RENAME_COLLECTION:
     case TRI_DF_MARKER_VPACK_CHANGE_COLLECTION:
+    case TRI_DF_MARKER_VPACK_RENAME_VIEW:
     case TRI_DF_MARKER_VPACK_CHANGE_VIEW:
     case TRI_DF_MARKER_VPACK_DROP_DATABASE:
     case TRI_DF_MARKER_VPACK_DROP_COLLECTION:
@@ -316,7 +208,7 @@ static int SliceifyMarker(MMFilesReplicationDumpContext* dump,
                           TRI_voc_tick_t databaseId, TRI_voc_cid_t collectionId,
                           MMFilesMarker const* marker, bool isDump,
                           bool withTicks, bool isEdgeCollection) {
-  TRI_ASSERT(MustReplicateWalMarkerType(marker));
+  TRI_ASSERT(MustReplicateWalMarkerType(marker, false));
   MMFilesMarkerType const type = marker->getType();
 
   VPackBuffer<uint8_t> buffer;
@@ -329,29 +221,8 @@ static int SliceifyMarker(MMFilesReplicationDumpContext* dump,
   if (!isDump) {
     // logger-follow command
     builder.add("tick", VPackValue(static_cast<uint64_t>(marker->getTick())));
-
-    if (dump->_compat28 && (type == TRI_DF_MARKER_VPACK_DOCUMENT ||
-                            type == TRI_DF_MARKER_VPACK_REMOVE)) {
-      // 2.8-compatible format
-      VPackSlice slice(reinterpret_cast<char const*>(marker) +
-                       MMFilesDatafileHelper::VPackOffset(type));
-      // additionally dump "key" and "rev" attributes on the top-level
-      builder.add("key", slice.get(StaticStrings::KeyString));
-      if (slice.hasKey(StaticStrings::RevString)) {
-        builder.add("rev", slice.get(StaticStrings::RevString));
-      }
-      // convert 2300 markers to 2301 markers for edges
-      if (type == TRI_DF_MARKER_VPACK_DOCUMENT && isEdgeCollection) {
-        builder.add("type", VPackValue(2301));
-      } else {
-        builder.add("type",
-                    VPackValue(static_cast<uint64_t>(TranslateType(marker))));
-      }
-    } else {
-      // 3.0 dump
-      builder.add("type",
-                  VPackValue(static_cast<uint64_t>(TranslateType(marker))));
-    }
+    builder.add("type",
+                VPackValue(static_cast<uint64_t>(TranslateType(marker))));
 
     if (type == TRI_DF_MARKER_VPACK_DOCUMENT ||
         type == TRI_DF_MARKER_VPACK_REMOVE ||
@@ -366,8 +237,8 @@ static int SliceifyMarker(MMFilesReplicationDumpContext* dump,
       if (collectionId > 0) {
         builder.add("cid", VPackValue(collectionId));
         // also include collection name
-        char const* cname = NameFromCid(dump, collectionId);
-        if (cname != nullptr) {
+        std::string const& cname = nameFromCid(dump, collectionId);
+        if (!cname.empty()) {
           builder.add("cname", VPackValue(cname));
         }
       }
@@ -377,27 +248,8 @@ static int SliceifyMarker(MMFilesReplicationDumpContext* dump,
     if (withTicks) {
       builder.add("tick", VPackValue(static_cast<uint64_t>(marker->getTick())));
     }
-
-    if (dump->_compat28 && (type == TRI_DF_MARKER_VPACK_DOCUMENT ||
-                            type == TRI_DF_MARKER_VPACK_REMOVE)) {
-      // 2.8-compatible format
-      VPackSlice slice(reinterpret_cast<char const*>(marker) +
-                       MMFilesDatafileHelper::VPackOffset(type));
-      builder.add("key", slice.get(StaticStrings::KeyString));
-      if (slice.hasKey(StaticStrings::RevString)) {
-        builder.add("rev", slice.get(StaticStrings::RevString));
-      }
-      // convert 2300 markers to 2301 markers for edges
-      if (type == TRI_DF_MARKER_VPACK_DOCUMENT && isEdgeCollection) {
-        builder.add("type", VPackValue(2301));
-      } else {
-        builder.add("type",
-                    VPackValue(static_cast<uint64_t>(TranslateType(marker))));
-      }
-    } else {
-      builder.add("type",
-                  VPackValue(static_cast<uint64_t>(TranslateType(marker))));
-    }
+    builder.add("type",
+                VPackValue(static_cast<uint64_t>(TranslateType(marker))));
   }
 
   switch (type) {
@@ -409,6 +261,7 @@ static int SliceifyMarker(MMFilesReplicationDumpContext* dump,
     case TRI_DF_MARKER_VPACK_CREATE_VIEW:
     case TRI_DF_MARKER_VPACK_RENAME_COLLECTION:
     case TRI_DF_MARKER_VPACK_CHANGE_COLLECTION:
+    case TRI_DF_MARKER_VPACK_RENAME_VIEW:
     case TRI_DF_MARKER_VPACK_CHANGE_VIEW:
     case TRI_DF_MARKER_VPACK_DROP_DATABASE:
     case TRI_DF_MARKER_VPACK_DROP_COLLECTION:
@@ -463,7 +316,7 @@ static bool MustReplicateWalMarker(
     TRI_voc_tick_t firstRegularTick,
     std::unordered_set<TRI_voc_tid_t> const& transactionIds) {
   // first check the marker type
-  if (!MustReplicateWalMarkerType(marker)) {
+  if (!MustReplicateWalMarkerType(marker, false)) {
     return false;
   }
 
@@ -476,9 +329,9 @@ static bool MustReplicateWalMarker(
   TRI_voc_cid_t cid = collectionId;
 
   if (cid != 0) {
-    char const* name = NameFromCid(dump, cid);
+    std::string const& name = nameFromCid(dump, cid);
 
-    if (name != nullptr &&
+    if (!name.empty() &&
         TRI_ExcludeCollectionReplication(name, dump->_includeSystem)) {
       return false;
     }
@@ -491,6 +344,7 @@ static bool MustReplicateWalMarker(
     return false;
   }
 
+  // after first regular tick, dump all transactions normally
   if (marker->getTick() >= firstRegularTick) {
     return true;
   }
@@ -541,7 +395,7 @@ static int DumpCollection(MMFilesReplicationDumpContext* dump,
       THROW_ARANGO_EXCEPTION(res);
     }
 
-    // TODO if vstcase find out slice lenght of _slices.back()
+    // TODO if vstcase find out slice length of _slices.back()
     if (static_cast<uint64_t>(TRI_LengthStringBuffer(dump->_buffer)) >
         dump->_chunkSize) {
       // abort the iteration
@@ -640,6 +494,7 @@ int MMFilesDumpLogReplication(
   // setup some iteration state
   int res = TRI_ERROR_NO_ERROR;
   TRI_voc_tick_t lastFoundTick = 0;
+  TRI_voc_tick_t lastScannedTick = 0;
   TRI_voc_tick_t lastDatabaseId = 0;
   TRI_voc_cid_t lastCollectionId = 0;
   bool hasMore = true;
@@ -709,6 +564,10 @@ int MMFilesDumpLogReplication(
 
         // get the marker's tick and check whether we should include it
         TRI_voc_tick_t foundTick = marker->getTick();
+
+        if (foundTick <= tickMax) {
+          lastScannedTick = foundTick;
+        }
 
         if (foundTick <= tickMin) {
           // marker too old
@@ -795,6 +654,7 @@ int MMFilesDumpLogReplication(
   MMFilesLogfileManager::instance()->returnLogfiles(logfiles);
 
   dump->_fromTickIncluded = fromTickIncluded;
+  dump->_lastScannedTick = lastScannedTick;
 
   if (res == TRI_ERROR_NO_ERROR) {
     if (lastFoundTick > 0) {

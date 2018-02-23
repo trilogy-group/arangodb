@@ -295,12 +295,12 @@ function ReplicationLoggerSuite () {
         var df = ranges[i];
         assertTrue(typeof df === 'object');
         assertTrue(df.hasOwnProperty('datafile'));
-        assertTrue(df.hasOwnProperty('state'));
+        assertTrue(df.hasOwnProperty('status'));
         assertTrue(df.hasOwnProperty('tickMin'));
         assertTrue(df.hasOwnProperty('tickMax'));
 
         assertTrue(typeof df.datafile === 'string');
-        assertTrue(typeof df.state === 'string');
+        assertTrue(typeof df.status === 'string');
         assertTrue(typeof df.tickMin === 'string');
         assertMatch(/^\d+$/, df.tickMin);
         assertTrue(typeof df.tickMax === 'string');
@@ -470,7 +470,7 @@ function ReplicationLoggerSuite () {
       c.save({ "test": 1, "_key": "abc" });
 
       var tick = getLastLogTick();
-      c.truncate();
+      c.truncate({ compact: false });
 
       var entry = getLogEntries(tick, 2302);
       assertEqual(1, entry.length);
@@ -481,7 +481,7 @@ function ReplicationLoggerSuite () {
       c.save({ "test": 1, "_key": "abc" });
 
       tick = getLastLogTick();
-      c.truncate();
+      c.truncate({ compact: false });
 
       entry = getLogEntries(tick, 2302);
       assertNotEqual("0", entry[0].tid);
@@ -502,7 +502,7 @@ function ReplicationLoggerSuite () {
       }
 
       var tick = getLastLogTick();
-      c.truncate();
+      c.truncate({ compact: false });
       getLastLogTick();
       var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2302 ]);
 
@@ -1582,6 +1582,391 @@ function ReplicationLoggerSuite () {
     },
 
 ////////////////////////////////////////////////////////////////////////////////
+/// @brief test actions
+////////////////////////////////////////////////////////////////////////////////
+
+    testLoggerTransactionUpdate : function () {
+      var c1 = db._create(cn);
+
+      c1.insert({ _key: "foo", value: 1 });
+
+      var tick = getLastLogTick();
+
+      db._executeTransaction({
+        collections: {
+          write: [ cn ]
+        },
+        action: function (params) {
+          var c1 = require("internal").db._collection(params.cn);
+              
+          c1.update("foo", { value: 2 });
+          c1.insert({ _key: "foo2", value: 3 });
+        },
+        params: {
+          cn: cn
+        }
+      });
+
+      var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2300 ]);
+      assertEqual(4, entry.length);
+
+      assertEqual(2200, entry[0].type);
+      assertEqual(2300, entry[1].type);
+      assertEqual(2300, entry[2].type);
+      assertEqual(2201, entry[3].type);
+
+      assertEqual(entry[0].tid, entry[1].tid);
+      assertEqual(entry[1].tid, entry[2].tid);
+      assertEqual(entry[2].tid, entry[3].tid);
+        
+      assertEqual("UnitTestsReplication", entry[1].cname);
+      assertEqual("foo", entry[1].data._key);
+      assertEqual(2, entry[1].data.value);
+      
+      assertEqual("UnitTestsReplication", entry[2].cname);
+      assertEqual("foo2", entry[2].data._key);
+      assertEqual(3, entry[2].data.value);
+    },
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief test actions
+////////////////////////////////////////////////////////////////////////////////
+
+    testLoggerTransactionReplace : function () {
+      var c1 = db._create(cn);
+
+      c1.insert({ _key: "foo", value: 1 });
+
+      var tick = getLastLogTick();
+
+      db._executeTransaction({
+        collections: {
+          write: [ cn ]
+        },
+        action: function (params) {
+          var c1 = require("internal").db._collection(params.cn);
+              
+          c1.replace("foo", { value2: 2 });
+          c1.insert({ _key: "foo2", value2: 3 });
+        },
+        params: {
+          cn: cn
+        }
+      });
+
+      var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2300 ]);
+      assertEqual(4, entry.length);
+
+      assertEqual(2200, entry[0].type);
+      assertEqual(2300, entry[1].type);
+      assertEqual(2300, entry[2].type);
+      assertEqual(2201, entry[3].type);
+
+      assertEqual(entry[0].tid, entry[1].tid);
+      assertEqual(entry[1].tid, entry[2].tid);
+      assertEqual(entry[2].tid, entry[3].tid);
+        
+      assertEqual("UnitTestsReplication", entry[1].cname);
+      assertEqual("foo", entry[1].data._key);
+      assertEqual(2, entry[1].data.value2);
+      assertFalse(entry[1].data.hasOwnProperty("value"));
+      
+      assertEqual("UnitTestsReplication", entry[2].cname);
+      assertEqual("foo2", entry[2].data._key);
+      assertEqual(3, entry[2].data.value2);
+      assertFalse(entry[2].data.hasOwnProperty("value"));
+    },
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief test actions
+////////////////////////////////////////////////////////////////////////////////
+
+    testLoggerTransactionRemove : function () {
+      var c1 = db._create(cn);
+
+      c1.insert({ _key: "foo", value: 1 });
+
+      var tick = getLastLogTick();
+
+      db._executeTransaction({
+        collections: {
+          write: [ cn ]
+        },
+        action: function (params) {
+          var c1 = require("internal").db._collection(params.cn);
+              
+          c1.replace("foo", { value2: 2 });
+          c1.remove("foo");
+        },
+        params: {
+          cn: cn
+        }
+      });
+
+      var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2300, 2302 ]);
+      assertEqual(4, entry.length);
+
+      assertEqual(2200, entry[0].type);
+      assertEqual(2300, entry[1].type);
+      assertEqual(2302, entry[2].type);
+      assertEqual(2201, entry[3].type);
+
+      assertEqual(entry[0].tid, entry[1].tid);
+      assertEqual(entry[1].tid, entry[2].tid);
+      assertEqual(entry[2].tid, entry[3].tid);
+        
+      assertEqual("UnitTestsReplication", entry[1].cname);
+      assertEqual("foo", entry[1].data._key);
+      assertEqual(2, entry[1].data.value2);
+      assertFalse(entry[1].data.hasOwnProperty("value"));
+      
+      assertEqual("UnitTestsReplication", entry[2].cname);
+      assertEqual("foo", entry[2].data._key);
+    },
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief test actions
+////////////////////////////////////////////////////////////////////////////////
+
+    testLoggerTransactionMultiRemove : function () {
+      var c1 = db._create(cn), i;
+
+      for (i = 0; i < 100; ++i) {
+        c1.insert({ _key: "test" + i, value: i });
+      }
+
+      var tick = getLastLogTick();
+
+      db._executeTransaction({
+        collections: {
+          write: [ cn ]
+        },
+        action: function (params) {
+          var c1 = require("internal").db._collection(params.cn);
+              
+          for (var i = 0; i < 100; ++i) {
+            c1.remove("test" + i);
+          }
+        },
+        params: {
+          cn: cn
+        }
+      });
+
+      var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2300, 2302 ]);
+      assertEqual(102, entry.length);
+
+      assertEqual(2200, entry[0].type);
+      assertEqual(2201, entry[101].type);
+      for (i = 1; i < 101; ++i) {
+        assertEqual(2302, entry[i].type);
+        assertEqual(entry[0].tid, entry[i].tid);
+        assertEqual("UnitTestsReplication", entry[i].cname);
+        assertEqual("test" + (i - 1), entry[i].data._key);
+      }
+    },
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief test actions
+////////////////////////////////////////////////////////////////////////////////
+
+    testLoggerTransactionMultiCollectionUpdate : function () {
+      var c1 = db._create(cn);
+      var c2 = db._create(cn2);
+
+      c1.insert({ _key: "foo", value: 1 });
+      c2.insert({ _key: "bar", value: "A" });
+
+      var tick = getLastLogTick();
+
+      db._executeTransaction({
+        collections: {
+          write: [ cn, cn2 ]
+        },
+        action: function (params) {
+          var c1 = require("internal").db._collection(params.cn);
+          var c2 = require("internal").db._collection(params.cn2);
+              
+          c1.replace("foo", { value: 2 });
+          c1.insert({ _key: "foo2", value: 3 });
+              
+          c2.replace("bar", { value: "B" });
+          c2.insert({ _key: "bar2", value: "C" });
+        },
+        params: {
+          cn: cn,
+          cn2: cn2
+        }
+      });
+
+      var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2300 ]);
+      assertEqual(6, entry.length);
+
+      assertEqual(2200, entry[0].type);
+      assertEqual(2300, entry[1].type);
+      assertEqual(2300, entry[2].type);
+      assertEqual(2300, entry[3].type);
+      assertEqual(2300, entry[4].type);
+      assertEqual(2201, entry[5].type);
+
+      assertEqual(entry[0].tid, entry[1].tid);
+      assertEqual(entry[1].tid, entry[2].tid);
+      assertEqual(entry[2].tid, entry[3].tid);
+      assertEqual(entry[3].tid, entry[4].tid);
+      assertEqual(entry[4].tid, entry[5].tid);
+        
+      assertEqual("UnitTestsReplication", entry[1].cname);
+      assertEqual("foo", entry[1].data._key);
+      assertEqual(2, entry[1].data.value);
+      
+      assertEqual("UnitTestsReplication", entry[2].cname);
+      assertEqual("foo2", entry[2].data._key);
+      assertEqual(3, entry[2].data.value);
+      
+      assertEqual("UnitTestsReplication2", entry[3].cname);
+      assertEqual("bar", entry[3].data._key);
+      assertEqual("B", entry[3].data.value);
+      
+      assertEqual("UnitTestsReplication2", entry[4].cname);
+      assertEqual("bar2", entry[4].data._key);
+      assertEqual("C", entry[4].data.value);
+    },
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief test actions
+////////////////////////////////////////////////////////////////////////////////
+
+    testLoggerTransactionMultiCollectionRemove : function () {
+      var c1 = db._create(cn);
+      var c2 = db._create(cn2);
+
+      c1.insert({ _key: "foo", value: 1 });
+      c2.insert({ _key: "bar", value: "A" });
+
+      var tick = getLastLogTick();
+
+      db._executeTransaction({
+        collections: {
+          write: [ cn, cn2 ]
+        },
+        action: function (params) {
+          var c1 = require("internal").db._collection(params.cn);
+          var c2 = require("internal").db._collection(params.cn2);
+              
+          c1.replace("foo", { value: 2 });
+          c1.remove("foo");
+              
+          c2.replace("bar", { value: "B" });
+          c2.remove("bar");
+        },
+        params: {
+          cn: cn,
+          cn2: cn2
+        }
+      });
+
+      var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2300, 2302 ]);
+      assertEqual(6, entry.length);
+
+      assertEqual(2200, entry[0].type);
+      assertEqual(2300, entry[1].type);
+      assertEqual(2302, entry[2].type);
+      assertEqual(2300, entry[3].type);
+      assertEqual(2302, entry[4].type);
+      assertEqual(2201, entry[5].type);
+
+      assertEqual(entry[0].tid, entry[1].tid);
+      assertEqual(entry[1].tid, entry[2].tid);
+      assertEqual(entry[2].tid, entry[3].tid);
+      assertEqual(entry[3].tid, entry[4].tid);
+      assertEqual(entry[4].tid, entry[5].tid);
+        
+      assertEqual("UnitTestsReplication", entry[1].cname);
+      assertEqual("foo", entry[1].data._key);
+      assertEqual(2, entry[1].data.value);
+      
+      assertEqual("UnitTestsReplication", entry[2].cname);
+      assertEqual("foo", entry[2].data._key);
+      
+      assertEqual("UnitTestsReplication2", entry[3].cname);
+      assertEqual("bar", entry[3].data._key);
+      assertEqual("B", entry[3].data.value);
+      
+      assertEqual("UnitTestsReplication2", entry[4].cname);
+      assertEqual("bar", entry[4].data._key);
+    },
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief test actions
+////////////////////////////////////////////////////////////////////////////////
+
+    testLoggerTransactionMultiCollectionReplace : function () {
+      var c1 = db._create(cn);
+      var c2 = db._create(cn2);
+
+      c1.insert({ _key: "foo", value: 1 });
+      c2.insert({ _key: "bar", value: "A" });
+
+      var tick = getLastLogTick();
+
+      db._executeTransaction({
+        collections: {
+          write: [ cn, cn2 ]
+        },
+        action: function (params) {
+          var c1 = require("internal").db._collection(params.cn);
+          var c2 = require("internal").db._collection(params.cn2);
+              
+          c1.update("foo", { value2: 2 });
+          c1.insert({ _key: "foo2", value2: 3 });
+              
+          c2.update("bar", { value2: "B" });
+          c2.insert({ _key: "bar2", value2: "C" });
+        },
+        params: {
+          cn: cn,
+          cn2: cn2
+        }
+      });
+
+      var entry = getLogEntries(tick, [ 2200, 2201, 2202, 2300 ]);
+      assertEqual(6, entry.length);
+
+      assertEqual(2200, entry[0].type);
+      assertEqual(2300, entry[1].type);
+      assertEqual(2300, entry[2].type);
+      assertEqual(2300, entry[3].type);
+      assertEqual(2300, entry[4].type);
+      assertEqual(2201, entry[5].type);
+
+      assertEqual(entry[0].tid, entry[1].tid);
+      assertEqual(entry[1].tid, entry[2].tid);
+      assertEqual(entry[2].tid, entry[3].tid);
+      assertEqual(entry[3].tid, entry[4].tid);
+      assertEqual(entry[4].tid, entry[5].tid);
+        
+      assertEqual("UnitTestsReplication", entry[1].cname);
+      assertEqual("foo", entry[1].data._key);
+      assertEqual(1, entry[1].data.value);
+      assertEqual(2, entry[1].data.value2);
+      
+      assertEqual("UnitTestsReplication", entry[2].cname);
+      assertEqual("foo2", entry[2].data._key);
+      assertEqual(3, entry[2].data.value2);
+      assertFalse(entry[2].data.hasOwnProperty("value"));
+      
+      assertEqual("UnitTestsReplication2", entry[3].cname);
+      assertEqual("bar", entry[3].data._key);
+      assertEqual("A", entry[3].data.value);
+      assertEqual("B", entry[3].data.value2);
+      
+      assertEqual("UnitTestsReplication2", entry[4].cname);
+      assertEqual("bar2", entry[4].data._key);
+      assertEqual("C", entry[4].data.value2);
+      assertFalse(entry[4].data.hasOwnProperty("value"));
+    },
+
+////////////////////////////////////////////////////////////////////////////////
 /// @brief test collection exclusion
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1638,7 +2023,7 @@ function ReplicationApplierSuite () {
 ////////////////////////////////////////////////////////////////////////////////
 
     setUp : function () {
-      replication.applier.shutdown();
+      replication.applier.stop();
       replication.applier.forget();
     },
 
@@ -1647,7 +2032,7 @@ function ReplicationApplierSuite () {
 ////////////////////////////////////////////////////////////////////////////////
 
     tearDown : function () {
-      replication.applier.shutdown();
+      replication.applier.stop();
     },
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1790,13 +2175,13 @@ function ReplicationApplierSuite () {
       assertTrue(state.state.running);
 
       // stop
-      replication.applier.shutdown();
+      replication.applier.stop();
 
       state = replication.applier.state();
       assertFalse(state.state.running);
 
       // stop again
-      replication.applier.shutdown();
+      replication.applier.stop();
 
       state = replication.applier.state();
       assertFalse(state.state.running);
@@ -1991,7 +2376,7 @@ function ReplicationSyncSuite () {
 ////////////////////////////////////////////////////////////////////////////////
 
     setUp : function () {
-      replication.applier.shutdown();
+      replication.applier.stop();
       replication.applier.forget();
     },
 
@@ -2081,8 +2466,7 @@ function ReplicationSyncSuite () {
         fail();
       }
       catch (err) {
-        assertTrue(errors.ERROR_BAD_PARAMETER.code === err.errorNum ||
-                   errors.ERROR_HTTP_BAD_PARAMETER.code === err.errorNum);
+        assertEqual(errors.ERROR_REPLICATION_INVALID_APPLIER_CONFIGURATION.code, err.errorNum);
       }
     },
 
@@ -2099,8 +2483,7 @@ function ReplicationSyncSuite () {
         fail();
       }
       catch (err) {
-        assertTrue(errors.ERROR_BAD_PARAMETER.code === err.errorNum ||
-                   errors.ERROR_HTTP_BAD_PARAMETER.code === err.errorNum);
+        assertEqual(errors.ERROR_REPLICATION_INVALID_APPLIER_CONFIGURATION.code, err.errorNum);
       }
     },
 
@@ -2117,8 +2500,7 @@ function ReplicationSyncSuite () {
         fail();
       }
       catch (err) {
-        assertTrue(errors.ERROR_BAD_PARAMETER.code === err.errorNum ||
-                   errors.ERROR_HTTP_BAD_PARAMETER.code === err.errorNum);
+        assertEqual(errors.ERROR_REPLICATION_INVALID_APPLIER_CONFIGURATION.code, err.errorNum);
       }
     },
 
@@ -2135,8 +2517,7 @@ function ReplicationSyncSuite () {
         fail();
       }
       catch (err) {
-        assertTrue(errors.ERROR_BAD_PARAMETER.code === err.errorNum ||
-                   errors.ERROR_HTTP_BAD_PARAMETER.code === err.errorNum);
+        assertEqual(errors.ERROR_REPLICATION_INVALID_APPLIER_CONFIGURATION.code, err.errorNum);
       }
     },
 
@@ -2154,14 +2535,12 @@ function ReplicationSyncSuite () {
         fail();
       }
       catch (err) {
-        assertTrue(errors.ERROR_BAD_PARAMETER.code === err.errorNum ||
-                   errors.ERROR_HTTP_BAD_PARAMETER.code === err.errorNum);
+        assertEqual(errors.ERROR_REPLICATION_INVALID_APPLIER_CONFIGURATION.code, err.errorNum);
       }
     }
 
   };
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief executes the test suites

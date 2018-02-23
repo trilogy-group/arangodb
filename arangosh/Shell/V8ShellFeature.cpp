@@ -151,9 +151,6 @@ void V8ShellFeature::start() {
 }
 
 void V8ShellFeature::unprepare() {
-  // turn off memory allocation failures before we move into V8 code
-  TRI_DisallowMemoryFailures();
-
   {
     v8::Locker locker{_isolate};
 
@@ -190,9 +187,6 @@ void V8ShellFeature::unprepare() {
   }
   
   _isolate->Dispose();
-  
-  // turn on memory allocation failures again
-  TRI_AllowMemoryFailures();
 }
 
 bool V8ShellFeature::printHello(V8ClientConnection* v8connection) {
@@ -349,8 +343,10 @@ int V8ShellFeature::runShell(std::vector<std::string> const& positionals) {
 
   bool const isBatch = isatty(STDIN_FILENO) == 0;
   bool lastEmpty = isBatch;
+  double lastDuration = 0.0;
 
   while (true) {
+    _console->setLastDuration(lastDuration);
     _console->setPromptError(promptError);
     auto prompt = _console->buildPrompt(client);
 
@@ -365,6 +361,7 @@ int V8ShellFeature::runShell(std::vector<std::string> const& positionals) {
     if (input.empty()) {
       promptError = false;
       lastEmpty = true;
+      lastDuration = 0.0;
       continue;
     }
     lastEmpty = isBatch;
@@ -392,9 +389,12 @@ int V8ShellFeature::runShell(std::vector<std::string> const& positionals) {
 
     // execute command and register its result in __LAST__
     v8LineEditor.setExecutingCommand(true);
+    double t1 = TRI_microtime();
 
     v8::Handle<v8::Value> v = TRI_ExecuteJavaScriptString(
         _isolate, context, TRI_V8_STD_STRING(_isolate, input), name, true);
+
+    lastDuration = TRI_microtime() - t1;
 
     v8LineEditor.setExecutingCommand(false);
 

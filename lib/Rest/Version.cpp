@@ -44,6 +44,10 @@
 #include <rocksdb/convenience.h>
 #include <rocksdb/version.h>
 
+#ifdef USE_IRESEARCH
+#include "3rdParty/iresearch/core/utils/version_defines.hpp"
+#endif
+
 using namespace arangodb::rest;
 
 std::map<std::string, std::string> Version::Values;
@@ -101,6 +105,9 @@ void Version::initialize() {
 #else
   Values["debug"] = "false";
 #endif
+#if defined(ARCHITECTURE_OPTIMIZATIONS)
+  Values["optimization-flags"] = std::string(ARCHITECTURE_OPTIMIZATIONS);
+#endif
   Values["endianness"] = getEndianness();
   Values["fd-setsize"] = arangodb::basics::StringUtils::itoa(FD_SETSIZE);
   Values["full-version-string"] = getVerboseVersionString();
@@ -143,10 +150,15 @@ void Version::initialize() {
   Values["cplusplus"] = "unknown";
 #endif
 
-#ifdef __SANITIZE_ADDRESS__
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
   Values["asan"] = "true";
 #else
   Values["asan"] = "false";
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+  Values["asan"] = "true";
+#  endif
+#endif
 #endif
 
 #if defined(__SSE4_2__) && !defined(NO_SSE42)
@@ -177,6 +189,10 @@ void Version::initialize() {
   Values["fd-client-event-handler"] = "poll";
 #else
   Values["fd-client-event-handler"] = "select";
+#endif
+
+#ifdef USE_IRESEARCH
+  Values["iresearch-version"] = getIResearchVersion();
 #endif
   
   for (auto& it : Values) {
@@ -286,6 +302,15 @@ std::string Version::getICUVersion() {
   return icuVersionString;
 }
 
+#ifdef USE_IRESEARCH
+
+/// @brief get IResearch version
+std::string Version::getIResearchVersion() {
+  return IResearch_version;
+}
+
+#endif
+
 /// @brief get compiler
 std::string Version::getCompiler() {
 #if defined(__clang__)
@@ -343,7 +368,7 @@ std::string Version::getVerboseVersionString() {
 #ifdef ARANGODB_ENABLE_MAINTAINER_MODE
           << " maintainer mode"
 #endif
-#ifdef __SANITIZE_ADDRESS__
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
           << " with ASAN"
 #endif
           << ", using "

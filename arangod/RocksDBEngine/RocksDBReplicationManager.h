@@ -25,6 +25,7 @@
 
 #include "Basics/Common.h"
 #include "Basics/Mutex.h"
+#include "Replication/InitialSyncer.h"
 #include "RocksDBEngine/RocksDBReplicationContext.h"
 
 struct TRI_vocbase_t;
@@ -54,7 +55,7 @@ class RocksDBReplicationManager {
   /// there are active contexts
   //////////////////////////////////////////////////////////////////////////////
 
-  RocksDBReplicationContext* createContext();
+  RocksDBReplicationContext* createContext(TRI_vocbase_t* vocbase, double ttl, TRI_server_id_t serverId);
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief remove a context by id
@@ -72,7 +73,7 @@ class RocksDBReplicationManager {
 
   RocksDBReplicationContext* find(
       RocksDBReplicationId, bool& isBusy,
-      double ttl = RocksDBReplicationContext::DefaultTTL);
+      double ttl = InitialSyncer::defaultBatchTimeout);
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief return a context for later use
@@ -109,6 +110,13 @@ class RocksDBReplicationManager {
   //////////////////////////////////////////////////////////////////////////////
 
   bool garbageCollect(bool);
+  
+  //////////////////////////////////////////////////////////////////////////////
+  /// @brief tell the replication manager that a shutdown is in progress
+  /// effectively this will block the creation of new contexts
+  //////////////////////////////////////////////////////////////////////////////
+    
+  void beginShutdown();
 
  private:
   //////////////////////////////////////////////////////////////////////////////
@@ -123,19 +131,36 @@ class RocksDBReplicationManager {
 
   std::unordered_map<RocksDBReplicationId, RocksDBReplicationContext*>
       _contexts;
-
+  
   //////////////////////////////////////////////////////////////////////////////
-  /// @brief maximum number of contexts to garbage-collect in one go
+  /// @brief whether or not a shutdown is in progress
   //////////////////////////////////////////////////////////////////////////////
 
-  static size_t const MaxCollectCount;
+  bool _isShuttingDown;
 };
 
 class RocksDBReplicationContextGuard {
  public:
-  RocksDBReplicationContextGuard(RocksDBReplicationManager*,
-                                 RocksDBReplicationContext*);
-  ~RocksDBReplicationContextGuard();
+  
+  RocksDBReplicationContextGuard(RocksDBReplicationManager* manager,
+                                 RocksDBReplicationContext* ctx)
+    : _manager(manager), _ctx(ctx) {
+    if (_ctx != nullptr) {
+      TRI_ASSERT(_ctx->isUsed());
+    }
+  }
+
+  RocksDBReplicationContextGuard(RocksDBReplicationContextGuard&& other)
+    noexcept : _manager(other._manager), _ctx(other._ctx) {
+    other._ctx = nullptr;
+  } 
+  
+  ~RocksDBReplicationContextGuard()  {
+    if (_ctx != nullptr) {
+      TRI_ASSERT(_ctx->isUsed());
+      _manager->release(_ctx);
+    }
+  }
 
  private:
   RocksDBReplicationManager* _manager;

@@ -33,7 +33,6 @@
 #include "Basics/Result.h"
 #include "Rest/CommonDefines.h"
 #include "Utils/Authentication.h"
-#include "Utils/ExecContext.h"
 #include "VocBase/AuthUserEntry.h"
 
 #include <velocypack/Builder.h>
@@ -53,6 +52,8 @@ class AuthResult {
   bool expired() { return _expiry != 0 && _expiry < TRI_microtime(); }
 
  public:
+  //enum class AuthenticationMethod { BASIC, JWT, NONE };
+
   std::string _username;
   bool _authorized;  // User exists and password was checked
   double _expiry;
@@ -67,9 +68,12 @@ class AuthJwtResult : public AuthResult {
 
 class AuthenticationHandler;
 
+typedef std::unordered_map<std::string, AuthUserEntry> AuthUserEntryMap;
+
 class AuthInfo {
+
  public:
-  AuthInfo(std::unique_ptr<AuthenticationHandler>&&);
+  explicit AuthInfo(std::unique_ptr<AuthenticationHandler>&&);
   ~AuthInfo();
 
  public:
@@ -78,7 +82,7 @@ class AuthInfo {
     _queryRegistry = registry;
   }
 
-  /// Tells coordinator to reload his data. Only call in HearBeat thread
+  /// Tells coordinator to reload its data. Only called in HeartBeat thread
   void outdate() { _outdated = true; }
 
   /// Trigger eventual reload, user facing API call
@@ -111,19 +115,47 @@ class AuthInfo {
 
   AuthResult checkAuthentication(arangodb::rest::AuthenticationMethod authType,
                                  std::string const& secret);
-
+  AuthLevel configuredDatabaseAuthLevel(std::string const& username,
+                                        std::string const& dbname);
+  AuthLevel configuredCollectionAuthLevel(std::string const& username,
+                                          std::string const& dbname,
+                                          std::string coll);
   AuthLevel canUseDatabase(std::string const& username,
                            std::string const& dbname);
   AuthLevel canUseCollection(std::string const& username,
                              std::string const& dbname,
                              std::string const& coll);
 
+  // No Lock variants of the above to be used in callbacks
+  // Use with CARE! You need to make sure that the lock
+  // is held from outside.
+  AuthLevel canUseDatabaseNoLock(std::string const& username,
+                                 std::string const& dbname);
+  AuthLevel canUseCollectionNoLock(std::string const& username,
+                                   std::string const& dbname,
+                                   std::string const& coll);
+
+
   void setJwtSecret(std::string const&);
   std::string jwtSecret();
   std::string generateJwt(VPackBuilder const&);
   std::string generateRawJwt(VPackBuilder const&);
 
+  void setAuthInfo(AuthUserEntryMap const& userEntryMap);
+
  private:
+  // worker function for canUseDatabase
+  // must only be called with the read-lock on _authInfoLock being held
+  AuthLevel configuredDatabaseAuthLevelInternal(std::string const& username,
+                                   std::string const& dbname, size_t depth) const;
+
+  // internal method called by canUseCollection
+  // asserts that collection name is non-empty and already translated
+  // from collection id to name
+  AuthLevel configuredCollectionAuthLevelInternal(std::string const& username,
+                                                  std::string const& dbname,
+                                                  std::string const& coll,
+                                                  size_t depth) const;
   void loadFromDB();
   bool parseUsers(velocypack::Slice const& slice);
   Result storeUserInternal(AuthUserEntry const& user, bool replace);
@@ -142,7 +174,7 @@ class AuthInfo {
   Mutex _loadFromDBLock;
   std::atomic<bool> _outdated;
 
-  std::unordered_map<std::string, AuthUserEntry> _authInfo;
+  AuthUserEntryMap _authInfo;
   std::unordered_map<std::string, arangodb::AuthResult> _authBasicCache;
   arangodb::basics::LruCache<std::string, arangodb::AuthJwtResult>
       _authJwtCache;

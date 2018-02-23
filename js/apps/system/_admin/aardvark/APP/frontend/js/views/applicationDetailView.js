@@ -1,5 +1,5 @@
 /* jshint browser: true */
-/* global Backbone, $, window, ace, arangoHelper, templateEngine, Joi, _ */
+/* global Backbone, $, window, ace, arangoHelper, CryptoJS, templateEngine, Joi, _ */
 (function () {
   'use strict';
 
@@ -80,6 +80,19 @@
       } else if (e.currentTarget.id === 'service-api') {
         this.resize();
         $('#swagger').show();
+        $('#swaggerIframe').remove();
+        // load swagger iframe
+        var path = window.location.pathname.split('/');
+        var urlswag = window.location.protocol + '//' + window.location.hostname + ':' + window.location.port + '/' + path[1] + '/' + path[2] + '/_admin/aardvark/foxxes/docs/index.html?mount=' + this.model.get('mount');
+
+        var ifr = $('<iframe/>', {
+          id: 'swaggerIframe',
+          src: urlswag,
+          load: function () {
+            $('#swagger').height($('.centralRow').height() - 150);
+          }
+        });
+        $('#swagger').append(ifr);
       } else if (e.currentTarget.id === 'service-info') {
         this.resize(true);
         this.render();
@@ -396,7 +409,7 @@
     applyConfig: function () {
       var cfg = {};
       _.each(this.model.get('config'), function (opt, key) {
-        var $el = $('#app_config_' + key);
+        var $el = $('#app_config_' + CryptoJS.MD5(key).toString());
         var val = $el.val();
         if (opt.type === 'boolean' || opt.type === 'bool') {
           cfg[key] = $el.is(':checked');
@@ -478,8 +491,9 @@
             msg: 'This field is required.'
           });
         }
+        console.log(name);
         return window.modalView[methodName](
-          'app_config_' + name,
+          'app_config_' + CryptoJS.MD5(name).toString(),
           name,
           currentValue,
           obj.description,

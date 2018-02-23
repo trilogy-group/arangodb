@@ -53,6 +53,10 @@ Debugging the build process
 ---------------------------
 If the compile goes wrong for no particular reason, appending 'verbose=' adds more output. For some reason V8 has VERBOSE=1 for the same effect.
 
+Build with AddressSanitizer (or ASan)
+-------------------------------------
+    -DUSE_JEMALLOC=Off -DBASE_LD_FLAGS="-fsanitize=address" -DBASE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+
 Temporary files and temp directories
 ------------------------------------
 Depending on the native way ArangoDB tries to locate the temporary directory.
@@ -250,6 +254,9 @@ arangosh is similar, however, you can only run tests which are intended to be ra
 mocha tests
 -----------
 All tests with -spec in their names are using the [mochajs.org](https://mochajs.org) framework.
+To run those tests, e.g. in the arangosh, use this:
+`const runTest = require("@arangodb/mocha-runner");`
+`runTest(<filepath>, true)`
 
 Javascript framework
 --------------------
@@ -368,11 +375,27 @@ creating the file `/etc/sysctl.d/corepattern.conf` (or add the following lines t
     # and know the PID plus the process name for later use.
     kernel.core_uses_pid = 1
     kernel.core_pattern =  /var/tmp/core-%e-%p-%t
+    
+to reload the above settings most systems support:
 
-Note that the `proc` paths translate sub-directories to dots. The non permanent way of doing this in a running system is:
+    sudo sysctl -p
+
+Note that the `proc` paths translate sub-directories to dots.
+The non permanent way of doing this in a running system is:
 
     echo 1 > /proc/sys/kernel/core_uses_pid
     echo '/var/tmp/core-%e-%p-%t' > /proc/sys/kernel/core_pattern
+
+(you may also inspect these files to validate the current settings)
+
+More modern systems facilitate [`systemd-coredump`](https://www.freedesktop.org/software/systemd/man/systemd-coredump.html) (via a similar named package) to controll coredumps.
+On most systems it will put compressed coredumps to `/var/lib/systemd/coredump`. 
+
+In order to use automatic coredump analysis with the unittests you need to configure 
+`/etc/systemd/coredump.conf` and set `Compress=no` - so instant analysis may take place.
+
+Please note that we can't support [Ubuntu Apport](https://wiki.ubuntu.com/Apport).
+Please use `apport-unpack` to send us the bare coredumps.
 
 Solaris Coredumps
 =================
@@ -513,6 +536,48 @@ Dependencies to build documentation:
   http://calibre-ebook.com/download
 
   Run the installer and follow the instructions.
+
+Add / Synchronize external documentation
+========================================
+We maintain documentation along with their respective git repositories of their component - 
+be it a driver or another utility which shouldn't be directly in sync to the ArangoDB core documentation.
+The maintainer of the respective component can alter the documentation, and once a good point in 
+time is reached, it can be sync'ed over via `Documentation/Scripts/fetchRefs.sh`, which spiders 
+the `SUMMARY.md` files of all books, creates a clone of the external resource, adds a `don't edit this here` note to the files, and copies them over. 
+
+The syntax of the `SUMMARY.md` integration are special comment lines that contain `git` in them in a semicolon separated value list:
+
+ - The git repository - the gitrepository containing the documentation - we will clone this; If authentification is required, prepend an `@` to `gituhb.com`
+ - The directory name where to clone it under `Documentation/Books/repos` (so several integration points can share a working copy)
+ - Subdirectory - the sub-directory inside of the git repository to integrate
+ - Source - may be empty if the whole Subdirectory should be mapped into the book the `SUMMARY.md` is in, else specify source files (one per line) or directories
+ - Destination - may be empty if the sub-directory on the remote repo should be mapped into the book the `SUMMARY.md` is located in; else specify a file or directory.
+ 
+If private repositories with authentification need to be cloned, the integrator can specify a username/password pair to the script. He/She can also create a clone in the `Documentation/Books/repos/$1` directory - where the script would clone it. 
+
+The script will reset & pull the repos. 
+
+For testing the user can checkout other remote branches in that directory.
+
+Below the integration lines regular lines referencing the integrated .md's have to be put to add the .md's to the books summary.
+
+Please note that the SUMMARY.md integration checks will fail if unreferenced .md's are present, or .md's are missing. 
+
+The fetched .md's should be committed along with the changes of the `SUMMARY.md`
+
+An example integrating an authentificated directory structure:
+
+    #   https://@github.com/arangodb/arangosync.git;arangosync;doc-integration/Manual;;/
+      * [Datacenter to datacenter replication](Scalability/DC2DC/README.md)
+        * [Introduction](Scalability/DC2DC/Introduction.md)
+        * [Applicability](Scalability/DC2DC/Applicability.md)
+        * [Requirements](Scalability/DC2DC/Requirements.md)
+
+Another example, integrating a single README.md from an unauthentificated repo mapping it into `Drivers/js/`:
+
+    * [Drivers](Drivers/README.md)
+    # https://github.com/arangodb/arangojs.git;arangojs;;README.md;Drivers/js/
+      * [Javascript](Drivers/js/README.md)
 
 Generate users documentation
 ============================
@@ -911,33 +976,9 @@ Then adjust the docker images in the config (`arangodb3.json`) and redeploy it u
 Front-End (WebUI)
 =========
 
-To see the changes of possible modifications in javascript files, templates
-and scss files please use grunt to generate the bundled version. 
-
-To install grunt (with all related dependencies), just go to the frontend app
-folder (/js/apps/system/_admin/aardvark/APP) and run: 
-
-`npm install`
-
-On Mac OS you also have to install grunt-cli:
-
-`(sudo) npm install -g grunt-cli`
-
-Then you can choose between three choices:
-
-1. Build all arangodb related files:
-
-  * `grunt`
-
-2. Build all arangodb related files, including libraries. This should always
-be used when we offer a new major release of arangodb.
-
-  * `grunt deploy`
-
-3. Live build arangodb related files, when a file has been changed. This task
-does not include the minifying process.
-
-  * `grunt watch`
+To build the current frontend build please use the command: `make frontend`.
+The command `make frontend_clean` will remove all available node modules and
+start a clean installation.
 
 --------------------------------------------------------------------------------
 NPM dependencies

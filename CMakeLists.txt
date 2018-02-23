@@ -50,6 +50,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
 
 option(SKIP_PACKAGING "" OFF)
+option(STATIC_EXECUTABLES "produce static executables" OFF)
+if (STATIC_EXECUTABLES)
+  set(CMAKE_EXE_LINKER_FLAGS "-static")
+endif()
 
 # be verbose about flags used
 option(VERBOSE "be verbose about flags used" OFF)
@@ -59,6 +63,7 @@ set(ENTERPRISE_INCLUDE_DIR "enterprise")
 option(USE_ENTERPRISE "enable enterprise build" OFF)
 
 if (USE_ENTERPRISE)
+  add_definitions("-DUSE_ENTERPRISE=1")
   add_subdirectory(enterprise)
 endif ()
 
@@ -72,8 +77,10 @@ endif ()
 # ------------------------------------------------------------------------------
 
 set(ARANGODB_VERSION_MAJOR      "3")
-set(ARANGODB_VERSION_MINOR      "3")
-set(ARANGODB_VERSION_REVISION   "devel")
+set(ARANGODB_VERSION_MINOR      "4")
+if (NOT DEFINED ARANGODB_VERSION_REVISION)
+  set(ARANGODB_VERSION_REVISION   "devel")
+endif()
 set(ARANGODB_PACKAGE_REVISION   "1")
 # version for the windows rc file needs to be numeric:
 if (ARANGODB_VERSION_REVISION GREATER -1)
@@ -99,7 +106,7 @@ set(ARANGO_BENCH_FRIENDLY_STRING   "arangobench - stress test program")
 set(ARANGO_DUMP_FRIENDLY_STRING    "arangodump - export")
 set(ARANGO_RESTORE_FRIENDLY_STRING "arangrestore - importer")
 set(ARANGO_EXPORT_FRIENDLY_STRING  "arangoexport - datae xporter")
-set(ARANGO_IMP_FRIENDLY_STRING     "arangoimp - TSV/CSV/JSON importer")
+set(ARANGO_IMPORT_FRIENDLY_STRING  "arangoimport - TSV/CSV/JSON importer")
 set(ARANGOSH_FRIENDLY_STRING       "arangosh - commandline client")
 set(ARANGO_VPACK_FRIENDLY_STRING   "arangovpack - vpack printer")
 
@@ -112,7 +119,7 @@ set(BIN_ARANGOBENCH   arangobench)
 set(BIN_ARANGOD       arangod)
 set(BIN_ARANGODUMP    arangodump)
 set(BIN_ARANGOEXPORT  arangoexport)
-set(BIN_ARANGOIMP     arangoimp)
+set(BIN_ARANGOIMPORT  arangoimport)
 set(BIN_ARANGORESTORE arangorestore)
 set(BIN_ARANGOSH      arangosh)
 set(BIN_ARANGOVPACK   arangovpack)
@@ -137,7 +144,7 @@ else ()
   string(TIMESTAMP ARANGODB_BUILD_DATE "%Y-%m-%d %H:%M:%S")
 endif ()
 
-configure_file (
+configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/Basics/build.h.in"
   "${CMAKE_CURRENT_BINARY_DIR}/lib/Basics/build.h"
   NEWLINE_STYLE UNIX
@@ -145,7 +152,7 @@ configure_file (
 
 if (NOT DEFINED GENERATE_BUILD_DATE OR GENERATE_BUILD_DATE)
   set(GENERATE_BUILD_DATE ON CACHE INTERNAL "whether we should generate the build date")
-  configure_file (
+  configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/Basics/build-date.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/lib/Basics/build-date.h"
     NEWLINE_STYLE UNIX
@@ -193,7 +200,7 @@ else ()
   set(HAVE_ARANGODB_BUILD_REPOSITORY "0")
 endif()
 
-configure_file (
+configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/lib/Basics/build-repository.h.in"
   "${CMAKE_CURRENT_BINARY_DIR}/lib/Basics/build-repository.h"
   NEWLINE_STYLE UNIX
@@ -352,11 +359,11 @@ endif ()
 
 if (CMAKE_COMPILER_IS_GNUCC)
   if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "5.4")
-    message(FATAL_ERROR "ArangoDB requires GCC 5.4 or newer.")
-  elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "6.9.9")
-    message(FATAL_ERROR "ArangoDB doesn't support GCC 7.0 yet.")
+    message(FATAL_ERROR "ArangoDB requires g++ 5.4 or newer.")
+  elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "7.9.9")
+    message(FATAL_ERROR "ArangoDB doesn't support g++ 8.0 yet.")
   endif()
-  set(BASE_C_FLAGS "${BASE_C_FLAGS} -std=gnu89")
+  set(BASE_C_FLAGS "${BASE_C_FLAGS}")
 endif ()
 
 if (CMAKE_COMPILER_IS_GNUCC OR APPLE)
@@ -433,6 +440,7 @@ include_directories(${PROJECT_SOURCE_DIR}/3rdParty/linenoise-ng/include)
 include_directories(${PROJECT_SOURCE_DIR}/3rdParty/linenoise-ng/src)
 include_directories(${PROJECT_SOURCE_DIR}/3rdParty/velocypack/include)
 include_directories(${PROJECT_SOURCE_DIR}/3rdParty/rocksdb/v5.6.X/include)
+include_directories(${PROJECT_SOURCE_DIR}/3rdParty/rocksdb/v5.6.X)
 
 include_directories(${PROJECT_BINARY_DIR})
 include_directories(${PROJECT_BINARY_DIR}/lib)
@@ -482,8 +490,11 @@ else ()
     set(ARANGODB_SSE42_FLAGS "-msse4.2")
   endif ()
 
-  set(BASE_FLAGS "${Vc_COMPILE_FLAGS} ${BASE_FLAGS}")
+  set(BASE_FLAGS "${Vc_ARCHITECTURE_FLAGS} ${BASE_FLAGS}")
 endif ()
+
+set(ARCHITECTURE_OPTIMIZATIONS "\"${Vc_ARCHITECTURE_FLAGS}\"")
+
 
 ################################################################################
 ## BACKTRACE
@@ -494,16 +505,20 @@ option(USE_BACKTRACE
   OFF
 )
 
+# iresearch uses backtrace anyway, so we need to find and link libexecinfo
+# for the case that we are on libmusl and not on glibc
+find_package(Backtrace)
+
 if (USE_BACKTRACE)
   if (MSVC)
     set(BT_LIBS "Dbghelp" CACHE path "Debug Helper libraries")
   else ()
-    set(BT_LIBS "" CACHE path "Debug Helper libraries")
+    set(BT_LIBS ${Backtrace_LIBRARY} CACHE path "Debug Helper libraries")
   endif ()
 
   add_definitions("-DARANGODB_ENABLE_BACKTRACE=1")
 else ()
-  set(BT_LIBS "" CACHE path "Debug Helper libraries")
+  set(BT_LIBS ${Backtrace_LIBRARY} CACHE path "Debug Helper libraries")
 endif ()
 
 ################################################################################
@@ -602,13 +617,7 @@ endfunction()
 # ------------------------------------------------------------------------------
 
 if (USE_JEMALLOC)
-  add_subdirectory(3rdParty/jemalloc)
   add_definitions("-DARANGODB_HAVE_JEMALLOC=1")
-
-  include_directories("${JEMALLOC_HOME}/include")
-  link_directories("${JEMALLOC_HOME}/lib")
-
-  set(SYS_LIBS ${SYS_LIBS} ${JEMALLOC_LIB})
 
   if (LINUX OR DARWIN)
     add_definitions("-DARANGODB_MMAP_JEMALLOC=1")
@@ -755,6 +764,18 @@ endif()
 ## 3RD PARTY
 ################################################################################
 
+# ------------------------------------------------------------------------------
+# IResearch
+# ------------------------------------------------------------------------------
+
+option(USE_IRESEARCH "enable ArangoSearch views" ON)
+
+if(USE_IRESEARCH)
+  add_definitions("-DUSE_IRESEARCH=1")
+
+  set(LIB_ARANGO_IRESEARCH arango_iresearch)
+endif()
+
 # 3rdParty exports:
 #
 # V8_VERSION
@@ -771,14 +792,11 @@ endif()
 add_definitions(-DBOOST_ALL_NO_LIB=1) #disable boost autolink on windows
 add_subdirectory(3rdParty)
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/boost)
 add_definitions("-DARANGODB_BOOST_VERSION=\"${BOOST_VERSION}\"")
 
 # ------------------------------------------------------------------------------
 # RocksDB
 # ------------------------------------------------------------------------------
-
-add_subdirectory(3rdParty/rocksdb)
 
 add_definitions(-DARANGODB_ROCKSDB_VERSION=\"${ROCKSDB_VERSION}\")
 include_directories(${ROCKSDB_INCLUDE_DIR})
@@ -858,15 +876,15 @@ add_definitions("-DARANGODB_ZLIB_VERSION=\"${ZLIB_VERSION}\"")
 ## cURL
 ################################################################################
 
+# This does not belong here! it should be handled in 3rdParty!
 add_definitions(-DCURL_STATICLIB=1)
-
 include_directories(
-  ${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/curl/curl-7.50.3/include/
-  ${CMAKE_CURRENT_BINARY_DIR}/3rdParty/curl/curl-7.50.3/include/curl/
+  ${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/curl/curl-7.57.0/include/
+  ${CMAKE_CURRENT_BINARY_DIR}/3rdParty/curl/curl-7.57.0/include/curl/
 )
 
 ################################################################################
-## PATHS, installation, packages
+## PATHS, installation, packages, frontend
 ################################################################################
 
 if (MSVC)
@@ -876,6 +894,7 @@ if (MSVC)
 endif()
 
 include(ArangoDBInstall)
+include(frontend/aardvark)
 if (NOT(SKIP_PACKAGING))
   include(packages/packages)
 endif()
@@ -910,7 +929,7 @@ if (USE_MAINTAINER_MODE)
   endforeach ()
 
   add_custom_target(errorfiles ALL DEPENDS ${ERROR_FILES_GEN})
- 
+
   set(EXIT_CODE_FILES
     lib/Basics/exitcodes.h
     lib/Basics/exitcodes.cpp
@@ -1001,7 +1020,7 @@ add_dependencies(arangobench   zlibstatic)
 add_dependencies(arangod       zlibstatic)
 add_dependencies(arangodump    zlibstatic)
 add_dependencies(arangoexport  zlibstatic)
-add_dependencies(arangoimp     zlibstatic)
+add_dependencies(arangoimport  zlibstatic)
 add_dependencies(arangorestore zlibstatic)
 add_dependencies(arangosh      zlibstatic)
 
@@ -1011,7 +1030,7 @@ if (NOT USE_PRECOMPILED_V8)
   add_dependencies(arangod       v8_build)
   add_dependencies(arangodump    v8_build)
   add_dependencies(arangoexport  v8_build)
-  add_dependencies(arangoimp     v8_build)
+  add_dependencies(arangoimport  v8_build)
   add_dependencies(arangorestore v8_build)
   add_dependencies(arangosh      v8_build)
   if (USE_CATCH_TESTS)
@@ -1054,7 +1073,7 @@ message(STATUS "building for git revision: ${ARANGODB_BUILD_REPOSITORY}")
 
 # if (VERBOSE)
 #   get_cmake_property(_variableNames VARIABLES)
-# 
+#
 #   foreach (_variableName ${_variableNames})
 #     message(STATUS "${_variableName}=${${_variableName}}")
 #   endforeach ()

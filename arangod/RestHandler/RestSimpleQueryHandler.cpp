@@ -27,7 +27,6 @@
 #include "Aql/QueryRegistry.h"
 #include "Basics/Exceptions.h"
 #include "Basics/MutexLocker.h"
-#include "Basics/ScopeGuard.h"
 #include "Basics/VelocyPackHelper.h"
 #include "Utils/Cursor.h"
 #include "Utils/CursorRepository.h"
@@ -75,6 +74,7 @@ void RestSimpleQueryHandler::allDocuments() {
       parseVelocyPackBody(parseSuccess);
 
   if (!parseSuccess) {
+    // error message generated in parseVelocyPackBody
     return;
   }
   
@@ -166,6 +166,7 @@ void RestSimpleQueryHandler::allDocumentKeys() {
       parseVelocyPackBody(parseSuccess);
 
   if (!parseSuccess) {
+    // error message generated in parseVelocyPackBody
     return;
   }
 

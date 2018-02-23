@@ -113,7 +113,7 @@ void MMFilesCleanupThread::run() {
         locker.wait(cleanupInterval());
       } else {
         // prevent busy waiting
-        usleep(10000);
+        std::this_thread::sleep_for(std::chrono::microseconds(10000));
       }
 
     } catch (...) {
@@ -171,7 +171,7 @@ void MMFilesCleanupThread::cleanupCollection(arangodb::LogicalCollection* collec
         if (!unloadChecked && !isInShutdown) {
           return false;
         }
-        // fall-through intentional
+        // intentionally falls through
       } else {
         // retry in next iteration
         unloadChecked = false;

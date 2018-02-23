@@ -34,8 +34,6 @@ var console = require('console');
 var actions = require('@arangodb/actions');
 var arangodb = require('@arangodb');
 
-// var queue = Foxx.queues.create("internal-demo-queue")
-
 // //////////////////////////////////////////////////////////////////////////////
 // / @brief was docuBlock JSF_get_admin_time
 // //////////////////////////////////////////////////////////////////////////////
@@ -46,24 +44,6 @@ actions.defineHttp({
 
   callback: function (req, res) {
     actions.resultOk(req, res, actions.HTTP_OK, { time: internal.time() });
-  }
-});
-
-// //////////////////////////////////////////////////////////////////////////////
-// / @brief was docuBlock JSF_get_admin_sleep
-// //////////////////////////////////////////////////////////////////////////////
-
-actions.defineHttp({
-  url: '_admin/sleep',
-  prefix: false,
-
-  callback: function (req, res) {
-    var time = parseFloat(req.parameters.duration);
-    if (isNaN(time)) {
-      time = 3.0;
-    }
-    internal.wait(time);
-    actions.resultOk(req, res, actions.HTTP_OK, { duration: time });
   }
 });
 
@@ -79,25 +59,6 @@ actions.defineHttp({
     res.responseCode = actions.HTTP_OK;
     res.contentType = 'application/json; charset=utf-8';
     req.rawRequestBody = require('internal').rawRequestBody(req);
-    res.body = JSON.stringify(req);
-  }
-});
-
-// //////////////////////////////////////////////////////////////////////////////
-// / @brief was docuBlock JSF_get_admin_long_echo
-// //////////////////////////////////////////////////////////////////////////////
-
-actions.defineHttp({
-  url: '_admin/long_echo',
-  prefix: true,
-
-  callback: function (req, res) {
-    require('console').log('long polling request from client %s', req.client.id);
-
-    res.responseCode = actions.HTTP_OK;
-    res.contentType = 'application/json; charset=utf-8';
-    res.headers = { 'transfer-encoding': 'chunked' };
-
     res.body = JSON.stringify(req);
   }
 });
@@ -452,47 +413,6 @@ actions.defineHttp({
     } catch (err) {
       actions.resultException(req, res, err, undefined, false);
     }
-  }
-});
-
-// //////////////////////////////////////////////////////////////////////////////
-// / @brief was docuBlock JSF_post_admin_test
-// //////////////////////////////////////////////////////////////////////////////
-
-actions.defineHttp({
-  url: '_admin/test',
-  prefix: false,
-
-  callback: function (req, res) {
-    var body = actions.getJsonBody(req, res);
-
-    if (body === undefined) {
-      return;
-    }
-
-    var tests = body.tests;
-    if (!Array.isArray(tests)) {
-      actions.resultError(req, res,
-        actions.HTTP_BAD, arangodb.ERROR_HTTP_BAD_PARAMETER,
-        "expected attribute 'tests' is missing");
-      return;
-    }
-
-    var jsUnity = require('jsunity');
-    var testResults = { passed: { }, error: false };
-
-    tests.forEach(function (test) {
-      var result = false;
-      try {
-        result = jsUnity.runTest(test);
-      } catch (err) {}
-      testResults.passed[test] = result;
-      if (!result) {
-        testResults.error = true;
-      }
-    });
-
-    actions.resultOk(req, res, actions.HTTP_OK, testResults);
   }
 });
 

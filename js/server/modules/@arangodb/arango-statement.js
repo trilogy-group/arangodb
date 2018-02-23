@@ -31,7 +31,7 @@
 module.isSystem = true;
 
 var ArangoStatement = require('@arangodb/arango-statement-common').ArangoStatement;
-var GeneralArrayCursor = require('@arangodb/simple-query-common').GeneralArrayCursor;
+var GeneralArrayCursor = require('@arangodb/arango-cursor').GeneralArrayCursor;
 
 // //////////////////////////////////////////////////////////////////////////////
 // / @brief parse a query and return the results
@@ -72,7 +72,7 @@ ArangoStatement.prototype.explain = function (options) {
 ArangoStatement.prototype.execute = function () {
   var opts = this._options || { };
   if (typeof opts === 'object') {
-    opts._doCount = this._doCount;
+    opts.count = this._doCount;
     if (this._cache !== undefined) {
       opts.cache = this._cache;
     }

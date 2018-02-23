@@ -78,12 +78,8 @@ static void JS_FlushWal(v8::FunctionCallbackInfo<v8::Value> const& args) {
     }
   }
 
-  arangodb::Result ret =
-      static_cast<RocksDBEngine*>(EngineSelectorFeature::ENGINE)->syncWal(
-          waitForSync, waitForCollector, writeShutdownFile);
-  if (!ret.ok()) {
-    THROW_ARANGO_EXCEPTION_MESSAGE(ret.errorNumber(), ret.errorMessage());
-  }
+  EngineSelectorFeature::ENGINE->flushWal(waitForSync, waitForCollector,
+                                          writeShutdownFile);
   TRI_V8_RETURN_TRUE();
   TRI_V8_TRY_CATCH_END
 }
@@ -196,6 +192,16 @@ static void JS_EstimateCollectionSize(
   TRI_V8_TRY_CATCH_END
 }
 
+static void JS_WaitForEstimatorSync(v8::FunctionCallbackInfo<v8::Value> const& args) {
+  TRI_V8_TRY_CATCH_BEGIN(isolate);
+  v8::HandleScope scope(isolate);
+
+  EngineSelectorFeature::ENGINE->waitForEstimatorSync(std::chrono::seconds(10));
+
+  TRI_V8_RETURN_TRUE();
+  TRI_V8_TRY_CATCH_END
+}
+
 void RocksDBV8Functions::registerResources() {
   ISOLATE;
   v8::HandleScope scope(isolate);
@@ -224,4 +230,8 @@ void RocksDBV8Functions::registerResources() {
                                JS_PropertiesWal, true);
   TRI_AddGlobalFunctionVocbase(isolate, TRI_V8_ASCII_STRING(isolate, "WAL_TRANSACTIONS"),
                                JS_TransactionsWal, true);
+  TRI_AddGlobalFunctionVocbase(isolate,
+                               TRI_V8_ASCII_STRING(isolate,
+                                                   "WAIT_FOR_ESTIMATOR_SYNC"),
+                               JS_WaitForEstimatorSync, true);
 }

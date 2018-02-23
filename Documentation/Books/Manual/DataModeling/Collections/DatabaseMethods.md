@@ -1,7 +1,9 @@
 Database Methods
 ================
 
-### Collection
+Collection
+----------
+
 <!-- arangod/V8Server/v8-vocbase.cpp -->
 
 
@@ -45,7 +47,9 @@ Unknown collection:
     @endDocuBlock collectionDatabaseNameUnknown
 
 
-### Create
+Create
+------
+
 <!-- arangod/V8Server/v8-vocindex.cpp -->
 
 
@@ -143,14 +147,17 @@ to the [naming conventions](../NamingConventions/README.md).
   servers holding copies take over, usually without an error being
   reported.
 
-- *distributeShardsLike* distribute the shards of this collection
-  cloning the shard distribution of another.
-
   When using the *Enterprise* version of ArangoDB the replicationFactor
   may be set to "satellite" making the collection locally joinable
   on every database server. This reduces the number of network hops
   dramatically when using joins in AQL at the costs of reduced write
   performance on these collections.
+
+- *distributeShardsLike* distribute the shards of this collection
+  cloning the shard distribution of another. If this value is set
+  it will copy *replicationFactor* and *numberOfShards* from the
+  other collection, the attributes in this collection will be 
+  ignored and can be ommited.
 
 
 `db._create(collection-name, properties, type)`
@@ -159,6 +166,22 @@ Specifies the optional *type* of the collection, it can either be *document*
 or *edge*. On default it is document. Instead of giving a type you can also use 
 *db._createEdgeCollection* or *db._createDocumentCollection*.
 
+`db._create(collection-name, properties[, type], options)`
+
+As an optional third (if the *type* string is being omitted) or fourth
+parameter you can specify an optional options map that controls how the
+cluster will create the collection. These options are only relevant at
+creation time and will not be persisted:
+
+- *waitForSyncReplication* (default: true)
+  When enabled the server will only report success back to the client
+  if all replicas have created the collection. Set to *false* if you want faster
+  server responses and don't care about full replication.
+
+- *enforceReplicationFactor* (default: true)
+  When enabled which means the server will check if there are enough replicas
+  available at creation time and bail out otherwise. Set to *false* to disable
+  this extra check.
 
 **Examples**
 
@@ -243,7 +266,9 @@ Creates a new document collection named *collection-name*. If the
 document name already exists and error is thrown.
 
 
-### All Collections
+All Collections
+---------------
+
 <!-- arangod/V8Server/v8-vocbase.cpp -->
 
 
@@ -266,7 +291,9 @@ Returns all collections of the given database.
 
 
 
-### Collection Name
+Collection Name
+---------------
+
 <!-- arangod/V8Server/v8-vocbase.cpp -->
 
 
@@ -291,7 +318,9 @@ default properties.
 
 
 
-### Drop
+Drop
+----
+
 <!-- js/server/modules/@arangodb/arango-database.js -->
 
 
@@ -355,7 +384,9 @@ Drops a system collection
     @END_EXAMPLE_ARANGOSH_OUTPUT
     @endDocuBlock collectionDatabaseDropSystem
 
-### Truncate
+Truncate
+--------
+
 <!-- js/server/modules/@arangodb/arango-database.js -->
 
 

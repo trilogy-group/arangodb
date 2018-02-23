@@ -65,7 +65,7 @@ class Ast {
 
   /// @brief return the variable generator
   inline VariableGenerator* variables() { return &_variables; }
-  
+
   /// @brief return the root of the AST
   inline AstNode const* root() const { return _root; }
 
@@ -149,8 +149,14 @@ class Ast {
   /// @brief create an AST example node
   AstNode* createNodeExample(AstNode const*, AstNode const*);
 
+  /// @brief create an AST subquery node
+  AstNode* createNodeSubquery();
+
   /// @brief create an AST for node
   AstNode* createNodeFor(char const*, size_t, AstNode const*, bool);
+
+  /// @brief create an AST for node, using an existing output variable
+  AstNode* createNodeFor(Variable*, AstNode const*);
 
   /// @brief create an AST let node, without an IF condition
   AstNode* createNodeLet(char const*, size_t, AstNode const*, bool);
@@ -217,6 +223,9 @@ class Ast {
   /// @brief create an AST collection node
   AstNode* createNodeCollection(char const*, AccessMode::Type);
 
+  /// @brief create an AST view node
+  AstNode* createNodeView(char const*);
+
   /// @brief create an AST reference node
   AstNode* createNodeReference(char const*, size_t);
 
@@ -227,7 +236,11 @@ class Ast {
   AstNode* createNodeReference(Variable const*);
 
   /// @brief create an AST parameter node
-  AstNode* createNodeParameter(char const*, size_t);
+  AstNode* createNodeParameter(
+    char const* name,
+    size_t length,
+    AstNode::DataSourceType dataSourceType = AstNode::DataSourceType::Invalid
+  );
 
   /// @brief create an AST quantifier node
   AstNode* createNodeQuantifier(int64_t);
@@ -303,7 +316,7 @@ class Ast {
 
   /// @brief create an AST collection pair node
   AstNode* createNodeCollectionPair(AstNode const*, AstNode const*);
- 
+
   /// @brief create an AST with collections node
   AstNode* createNodeWithCollections (AstNode const*);
 
@@ -344,7 +357,11 @@ class Ast {
                                   AstNode const*, AstNode const*);
 
   /// @brief create an AST function call node
-  AstNode* createNodeFunctionCall(char const*, AstNode const*);
+  AstNode* createNodeFunctionCall(char const* functionName, AstNode const* arguments) {
+    return createNodeFunctionCall(functionName, strlen(functionName), arguments);
+  }
+
+  AstNode* createNodeFunctionCall(char const* functionName, size_t length, AstNode const* arguments);
 
   /// @brief create an AST range node
   AstNode* createNodeRange(AstNode const*, AstNode const*);
@@ -387,7 +404,7 @@ class Ast {
   /// @brief determines the top-level attributes in an expression, grouped by
   /// variable
   static TopLevelAttributes getReferencedAttributes(AstNode const*, bool&);
-  
+
   static bool populateSingleAttributeAccess(AstNode const* node,
                                             Variable const* variable,
                                             std::vector<std::string>& attributeName);
@@ -395,7 +412,7 @@ class Ast {
   static bool variableOnlyUsedForSingleAttributeAccess(AstNode const* node,
                                                        Variable const* variable,
                                                        std::vector<std::string> const& attributeName);
-  
+
   /// @brief replace an attribute access with just the variable
   static AstNode* replaceAttributeAccess(AstNode* node,
                                          Variable const* variable,
@@ -403,6 +420,9 @@ class Ast {
 
   /// @brief recursively clone a node
   AstNode* clone(AstNode const*);
+
+  /// @brief clone a node, but do not recursively clone subtree
+  AstNode* shallowCopyForModify(AstNode const*);
 
   /// @brief deduplicate an array
   /// will return the original node if no modifications were made, and a new
@@ -420,7 +440,7 @@ class Ast {
 
   /// @brief create an AST node from vpack
   AstNode* nodeFromVPack(arangodb::velocypack::Slice const&, bool);
-  
+
   /// @brief resolve an attribute access
   static AstNode const* resolveConstAttributeAccess(AstNode const*);
 
@@ -512,9 +532,9 @@ public:
   static void traverseReadOnly(AstNode const*,
                                std::function<void(AstNode const*, void*)>,
                                void*);
-private:
+ private:
   /// @brief normalize a function name
-  std::pair<std::string, bool> normalizeFunctionName(char const*);
+  std::pair<std::string, bool> normalizeFunctionName(char const* functionName, size_t length);
 
   /// @brief create a node of the specified type
   AstNode* createNode(AstNodeType);

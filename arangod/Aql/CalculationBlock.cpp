@@ -27,7 +27,6 @@
 #include "Aql/Functions.h"
 #include "Aql/Query.h"
 #include "Basics/Exceptions.h"
-#include "Basics/ScopeGuard.h"
 #include "Basics/VelocyPackHelper.h"
 #include "StorageEngine/TransactionState.h"
 #include "Transaction/Methods.h"
@@ -43,7 +42,8 @@ CalculationBlock::CalculationBlock(ExecutionEngine* engine,
       _inVars(),
       _inRegs(),
       _outReg(ExecutionNode::MaxRegisterId),
-      _conditionReg(ExecutionNode::MaxRegisterId) {
+      _conditionReg(ExecutionNode::MaxRegisterId),
+      _isRunningInCluster(ServerState::instance()->isRunningInCluster()) {
   std::unordered_set<Variable const*> inVars;
   _expression->variables(inVars);
 
@@ -157,20 +157,19 @@ void CalculationBlock::doEvaluation(AqlItemBlock* result) {
     // an expression that does not require V8
     executeExpression(result);
   } else {
-    bool const isRunningInCluster = transaction()->state()->isRunningInCluster();
+    auto cleanup = [this]() {
+      if (_isRunningInCluster) {
+        // must invalidate the expression now as we might be called from
+        // different threads
+        _expression->invalidate();
 
+        _engine->getQuery()->exitContext();
+      }
+    };
+    
     // must have a V8 context here to protect Expression::execute()
-    arangodb::basics::ScopeGuard guard{
-        [&]() -> void { _engine->getQuery()->enterContext(); },
-        [&]() -> void {
-          if (isRunningInCluster) {
-            // must invalidate the expression now as we might be called from
-            // different threads
-            _expression->invalidate();
-
-            _engine->getQuery()->exitContext();
-          }
-        }};
+    _engine->getQuery()->enterContext();
+    TRI_DEFER(cleanup());
 
     ISOLATE;
     v8::HandleScope scope(isolate);  // do not delete this!
@@ -186,7 +185,7 @@ void CalculationBlock::doEvaluation(AqlItemBlock* result) {
 
 AqlItemBlock* CalculationBlock::getSome(size_t atLeast, size_t atMost) {
   DEBUG_BEGIN_BLOCK();
-  traceGetSomeBegin();
+  traceGetSomeBegin(atLeast, atMost);
   std::unique_ptr<AqlItemBlock> res(
       ExecutionBlock::getSomeWithoutRegisterClearout(atLeast, atMost));
 

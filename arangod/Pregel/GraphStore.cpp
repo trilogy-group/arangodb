@@ -79,7 +79,7 @@ GraphStore<V, E>::GraphStore(TRI_vocbase_t* vb, GraphFormat<V, E>* graphFormat)
 template <typename V, typename E>
 GraphStore<V, E>::~GraphStore() {
   _destroyed = true;
-  usleep(25 * 1000);
+  std::this_thread::sleep_for(std::chrono::microseconds(25 * 1000));
   delete _vertexData;
   delete _edges;
 }
@@ -102,7 +102,7 @@ std::unordered_map<ShardID, uint64_t> GraphStore<V, E>::_preallocateMemory() {
   uint64_t vCount = 0;
   for (auto const& shard : _config->localVertexShardIDs()) {
     OperationResult opResult = countTrx->count(shard, true);
-    if (opResult.failed() || _destroyed) {
+    if (opResult.fail() || _destroyed) {
       THROW_ARANGO_EXCEPTION(TRI_ERROR_BAD_PARAMETER);
     }
     shardSizes[shard] = opResult.slice().getUInt();
@@ -113,7 +113,7 @@ std::unordered_map<ShardID, uint64_t> GraphStore<V, E>::_preallocateMemory() {
   uint64_t eCount = 0;
   for (auto const& shard : _config->localEdgeShardIDs()) {
     OperationResult opResult = countTrx->count(shard, true);
-    if (opResult.failed() || _destroyed) {
+    if (opResult.fail() || _destroyed) {
       THROW_ARANGO_EXCEPTION(TRI_ERROR_BAD_PARAMETER);
     }
     shardSizes[shard] = opResult.slice().getUInt();
@@ -210,7 +210,7 @@ void GraphStore<V, E>::loadShards(WorkerConfig* config,
       }
       
       while (_runningThreads > 0) {
-        usleep(5000);
+        std::this_thread::sleep_for(std::chrono::microseconds(5000));
       }
     }
     scheduler->post(callback);
@@ -246,7 +246,7 @@ void GraphStore<V, E>::loadDocument(WorkerConfig* config,
   Result res = trx->documentFastPathLocal(vertexShard, StringRef(_key),
                                           mmdr, true);
   if (res.fail()) {
-    THROW_ARANGO_EXCEPTION(res.errorNumber());
+    THROW_ARANGO_EXCEPTION(res);
   }
 
   VPackSlice doc(mmdr.vpack());
@@ -336,7 +336,7 @@ std::unique_ptr<transaction::Methods> GraphStore<V, E>::_createTransaction() {
   transaction::Options transactionOptions;
   transactionOptions.waitForSync = false;
   transactionOptions.allowImplicitCollections = true;
-  auto ctx = transaction::StandaloneContext::Create(_vocbaseGuard.vocbase());
+  auto ctx = transaction::StandaloneContext::Create(_vocbaseGuard.database());
   std::unique_ptr<transaction::Methods> trx(
       new transaction::UserTransaction(ctx, {}, {}, {}, transactionOptions));
   Result res = trx->begin();
@@ -358,11 +358,10 @@ void GraphStore<V, E>::_loadVertices(size_t i,
   trx->pinData(cid);  // will throw when it fails
   PregelShard sourceShard = (PregelShard)_config->shardId(vertexShard);
 
-  ManagedDocumentResult mmdr;
   std::unique_ptr<OperationCursor> cursor =
-      trx->indexScan(vertexShard, transaction::Methods::CursorType::ALL, &mmdr, false);
+      trx->indexScan(vertexShard, transaction::Methods::CursorType::ALL, false);
 
-  if (cursor->failed()) {
+  if (cursor->fail()) {
     THROW_ARANGO_EXCEPTION_FORMAT(cursor->code, "while looking up shard '%s'",
                                   vertexShard.c_str());
   }
@@ -424,7 +423,7 @@ void GraphStore<V, E>::_loadEdges(transaction::Methods* trx,
                                      StaticStrings::FromString, 0);
   ManagedDocumentResult mmdr;
   std::unique_ptr<OperationCursor> cursor = info.getEdges(documentID, &mmdr);
-  if (cursor->failed()) {
+  if (cursor->fail()) {
     THROW_ARANGO_EXCEPTION_FORMAT(cursor->code,
                                   "while looking up edges '%s' from %s",
                                   documentID.c_str(), edgeShard.c_str());
@@ -515,7 +514,7 @@ void GraphStore<V, E>::_storeVertices(std::vector<ShardID> const& globalShards,
       transactionOptions.waitForSync = false;
       transactionOptions.allowImplicitCollections = false;
       trx.reset(new transaction::UserTransaction(
-          transaction::StandaloneContext::Create(_vocbaseGuard.vocbase()), {},
+          transaction::StandaloneContext::Create(_vocbaseGuard.database()), {},
           {shard}, {}, transactionOptions));
       res = trx->begin();
       if (!res.ok()) {
@@ -552,8 +551,8 @@ void GraphStore<V, E>::_storeVertices(std::vector<ShardID> const& globalShards,
     ShardID const& shard = globalShards[currentShard];
     OperationOptions options;
     OperationResult result = trx->update(shard, b->slice(), options);
-    if (result.code != TRI_ERROR_NO_ERROR) {
-      THROW_ARANGO_EXCEPTION(result.code);
+    if (result.fail()) {
+      THROW_ARANGO_EXCEPTION(result.result);
     }
   }
 

@@ -118,10 +118,8 @@ class Supervision : public arangodb::Thread {
     return _agencyPrefix;
   }
 
-  static void setAgencyPrefix(std::string prefix) {
-    LOG_TOPIC(WARN, Logger::SUPERVISION) << "WTF? " << _agencyPrefix;
+  static void setAgencyPrefix(std::string const& prefix) {
     _agencyPrefix = prefix;
-    LOG_TOPIC(WARN, Logger::SUPERVISION) << "WTF? " << _agencyPrefix;
   }
 
  private:
@@ -131,6 +129,9 @@ class Supervision : public arangodb::Thread {
 
   /// @brief Upgrade agency to supervision overhaul jobs 
   void upgradeOne(VPackBuilder&);
+
+  /// @brief Upgrade agency to supervision overhaul jobs 
+  void upgradeHealthRecords(VPackBuilder&);
 
   /// @brief Check for inconsistencies in replication factor vs dbs entries
   void enforceReplication();
@@ -202,6 +203,15 @@ class Supervision : public arangodb::Thread {
   static std::string _agencyPrefix;  // initialized in AgencyFeature
 
 };
+
+/**
+ * @brief Helper function to build transaction removing no longer
+ *        present servers from health monitoring
+ *
+ * @param  todelete  List of servers to be removed
+ * @return           Agency transaction
+ */
+query_t removeTransactionBuilder(std::vector<std::string> const&);
 
 inline std::string timepointToString(Supervision::TimePoint const& t) {
   time_t tt = std::chrono::system_clock::to_time_t(t);

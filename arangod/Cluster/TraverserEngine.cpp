@@ -100,6 +100,7 @@ BaseEngine::BaseEngine(TRI_vocbase_t* vocbase, VPackSlice info)
   // FIXME: in the future this needs to be replaced with t
   // he new cluster wide transactions
   transaction::Options trxOpts;
+  auto ctx = arangodb::transaction::StandaloneContext::Create(vocbase);
 #ifdef USE_ENTERPRISE
   VPackSlice inaccessSlice = shardsSlice.get(INACCESSIBLE);
   if (inaccessSlice.isArray()) {
@@ -109,18 +110,15 @@ BaseEngine::BaseEngine(TRI_vocbase_t* vocbase, VPackSlice info)
       TRI_ASSERT(shard.isString());
       inaccessible.insert(shard.copyString());
     }
-    _trx = aql::AqlTransaction::create(
-        arangodb::transaction::StandaloneContext::Create(vocbase),
-        _collections.collections(), trxOpts, true, inaccessible);
+    _trx = aql::AqlTransaction::create(ctx, _collections.collections(),
+                                       trxOpts, true, inaccessible);
   } else {
-    _trx = aql::AqlTransaction::create(
-        arangodb::transaction::StandaloneContext::Create(vocbase),
-        _collections.collections(), trxOpts, true);
+    _trx = aql::AqlTransaction::create(ctx, _collections.collections(),
+                                       trxOpts, true);
   }
 #else
-  _trx = aql::AqlTransaction::create(
-       arangodb::transaction::StandaloneContext::Create(vocbase),
-       _collections.collections(), trxOpts, true);
+  _trx = aql::AqlTransaction::create(ctx, _collections.collections(),
+                                     trxOpts, true);
 #endif
 
   // true here as last argument is crucial: it leads to the fact that the
@@ -168,13 +166,16 @@ bool BaseEngine::lockCollection(std::string const& shard) {
     return false;
   }
   _trx->pinData(cid);  // will throw when it fails
-  Result res = _trx->lock(cid, AccessMode::Type::READ);
-  if (!res.ok()) {
+
+  Result lockResult = _trx->lockRecursive(cid, AccessMode::Type::READ);
+  
+  if (!lockResult.ok() && !lockResult.is(TRI_ERROR_LOCKED)) {
     LOG_TOPIC(ERR, arangodb::Logger::FIXME)
-        << "Logging Shard " << shard << " lead to exception '"
-        << res.errorNumber() << "' (" << res.errorMessage() << ") ";
+        << "Locking shard " << shard << " lead to exception '"
+        << lockResult.errorNumber() << "' (" << lockResult.errorMessage() << ") ";
     return false;
   }
+
   return true;
 }
 

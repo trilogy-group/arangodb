@@ -40,8 +40,8 @@ using namespace arangodb::transaction;
 using namespace arangodb::traverser;
 using VPackHelper = arangodb::basics::VelocyPackHelper;
 
-TraverserOptions::TraverserOptions(transaction::Methods* trx)
-    : BaseOptions(trx),
+TraverserOptions::TraverserOptions(aql::Query* query)
+    : BaseOptions(query),
       _baseVertexExpression(nullptr),
       _traverser(nullptr),
       minDepth(1),
@@ -50,9 +50,9 @@ TraverserOptions::TraverserOptions(transaction::Methods* trx)
       uniqueVertices(UniquenessLevel::NONE),
       uniqueEdges(UniquenessLevel::PATH) {}
 
-TraverserOptions::TraverserOptions(transaction::Methods* trx,
+TraverserOptions::TraverserOptions(aql::Query* query,
                                    VPackSlice const& obj)
-    : BaseOptions(trx),
+    : BaseOptions(query),
       _baseVertexExpression(nullptr),
       _traverser(nullptr),
       minDepth(1),
@@ -238,7 +238,7 @@ arangodb::traverser::TraverserOptions::TraverserOptions(
 
 arangodb::traverser::TraverserOptions::TraverserOptions(
     TraverserOptions const& other)
-    : BaseOptions(other.trx()),
+    : BaseOptions(other._query),
       _baseVertexExpression(nullptr),
       _traverser(nullptr),
       minDepth(other.minDepth),
@@ -532,7 +532,7 @@ double TraverserOptions::estimateCost(size_t& nrItems) const {
   size_t baseCreateItems = 0;
   double baseCost = costForLookupInfoList(_baseLookupInfos, baseCreateItems);
 
-  for (uint64_t depth = 0; depth < maxDepth; ++depth) {
+  for (uint64_t depth = 0; depth < maxDepth && depth < 10; ++depth) {
     auto liList = _depthLookupInfo.find(depth);
     if (liList == _depthLookupInfo.end()) {
       // No LookupInfo for this depth use base
@@ -544,6 +544,12 @@ double TraverserOptions::estimateCost(size_t& nrItems) const {
       cost += depthCost * count;
       count *= createItems;
     }
+  }
+
+  if (maxDepth > 10) {
+    // We have a too high depth this cost will be pruned anyway
+    cost *= (maxDepth - 10) * 10;
+    count *= (maxDepth - 10) * 10;
   }
   nrItems = count;
   return cost;

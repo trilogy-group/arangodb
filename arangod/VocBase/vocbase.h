@@ -36,23 +36,17 @@
 
 #include "velocypack/Builder.h"
 #include "velocypack/Slice.h"
-#include "velocypack/velocypack-aliases.h"
 
 #include <functional>
 
-class TRI_replication_applier_t;
-
 namespace arangodb {
-namespace velocypack {
-class Builder;
-class Slice;
-}
 namespace aql {
 class QueryList;
 }
 class CollectionNameResolver;
 class CollectionKeysRepository;
 class CursorRepository;
+class DatabaseReplicationApplier;
 class LogicalCollection;
 class LogicalView;
 class StorageEngine;
@@ -159,6 +153,7 @@ struct TRI_vocbase_t {
   bool _isOwnAppsDirectory;
 
   mutable arangodb::basics::ReadWriteLock _collectionsLock;  // collection iterator lock
+  mutable std::atomic<std::thread::id> _collectionsLockWriteOwner; // current thread owning '_collectionsLock' write lock (workaround for non-recusrive ReadWriteLock)
   std::vector<arangodb::LogicalCollection*>
       _collections;  // pointers to ALL collections
   std::vector<arangodb::LogicalCollection*>
@@ -170,8 +165,11 @@ struct TRI_vocbase_t {
       _collectionsByName;  // collections by name
   std::unordered_map<TRI_voc_cid_t, arangodb::LogicalCollection*>
       _collectionsById;  // collections by id
+  std::unordered_map<std::string, arangodb::LogicalCollection*>
+      _collectionsByUuid;  // collections by uuid
 
-  arangodb::basics::ReadWriteLock _viewsLock;  // views management lock
+  mutable arangodb::basics::ReadWriteLock _viewsLock;  // views management lock
+  mutable std::atomic<std::thread::id> _viewsLockWriteOwner; // current thread owning '_viewsLock' write lock (workaround for non-recusrive ReadWriteLock)
   std::unordered_map<std::string, std::shared_ptr<arangodb::LogicalView>>
       _viewsByName;  // views by name
   std::unordered_map<TRI_voc_cid_t, std::shared_ptr<arangodb::LogicalView>>
@@ -181,7 +179,7 @@ struct TRI_vocbase_t {
   std::unique_ptr<arangodb::CursorRepository> _cursorRepository;
   std::unique_ptr<arangodb::CollectionKeysRepository> _collectionKeys;
 
-  std::unique_ptr<TRI_replication_applier_t> _replicationApplier;
+  std::unique_ptr<arangodb::DatabaseReplicationApplier> _replicationApplier;
 
   arangodb::basics::ReadWriteLock _replicationClientsLock;
   std::unordered_map<TRI_server_id_t, std::pair<double, TRI_voc_tick_t>>
@@ -207,16 +205,24 @@ struct TRI_vocbase_t {
   TRI_vocbase_type_e type() const { return _type; }
   State state() const { return _state; }
   void setState(State state) { _state = state; }
-  void updateReplicationClient(TRI_server_id_t, TRI_voc_tick_t);
+  // return all replication clients registered
   std::vector<std::tuple<TRI_server_id_t, double, TRI_voc_tick_t>>
   getReplicationClients();
-  /// garbage collect replication clients
-  void garbageCollectReplicationClients(double ttl);
+
+  // the ttl value is amount of seconds after which the client entry will
+  // expire and may be garbage-collected
+  void updateReplicationClient(TRI_server_id_t, double ttl);
+  // the ttl value is amount of seconds after which the client entry will
+  // expire and may be garbage-collected
+  void updateReplicationClient(TRI_server_id_t, TRI_voc_tick_t, double ttl);
+  // garbage collect replication clients that have an expire date later
+  // than the specified timetamp
+  void garbageCollectReplicationClients(double expireStamp);
   
-  TRI_replication_applier_t* replicationApplier() const {
+  arangodb::DatabaseReplicationApplier* replicationApplier() const {
     return _replicationApplier.get();
   }
-  void addReplicationApplier(TRI_replication_applier_t* applier);
+  void addReplicationApplier();
 
   arangodb::aql::QueryList* queryList() const { return _queries.get(); }
   arangodb::CursorRepository* cursorRepository() const {
@@ -273,7 +279,14 @@ struct TRI_vocbase_t {
   /// returns empty string if the collection does not exist.
   std::string collectionName(TRI_voc_cid_t id);
 
-  /// @brief looks up a collection by name
+  /// @brief get a view name by a view id
+  /// the name is fetched under a lock to make this thread-safe.
+  /// returns empty string if the view does not exist.
+  std::string viewName(TRI_voc_cid_t id) const;
+
+  /// @brief looks up a collection by uuid
+  arangodb::LogicalCollection* lookupCollectionByUuid(std::string const&) const;
+  /// @brief looks up a collection by name, identifier (cid) or uuid
   arangodb::LogicalCollection* lookupCollection(std::string const& name) const;
   /// @brief looks up a collection by identifier
   arangodb::LogicalCollection* lookupCollection(TRI_voc_cid_t id) const;
@@ -286,10 +299,13 @@ struct TRI_vocbase_t {
   /// @brief returns all known collections with their parameters
   /// and optionally indexes
   /// the result is sorted by type and name (vertices before edges)
-  std::shared_ptr<arangodb::velocypack::Builder> inventory(
-      TRI_voc_tick_t, bool (*)(arangodb::LogicalCollection*, void*), void*,
-      bool, std::function<bool(arangodb::LogicalCollection*,
-                               arangodb::LogicalCollection*)>);
+  void inventory(arangodb::velocypack::Builder& result,
+                 TRI_voc_tick_t, 
+                 std::function<bool(arangodb::LogicalCollection const*)> const& nameFilter);
+
+  /// @brief renames a view
+  int renameView(std::shared_ptr<arangodb::LogicalView> view,
+                 std::string const& newName);
 
   /// @brief renames a collection
   int renameCollection(arangodb::LogicalCollection* collection,
@@ -346,11 +362,25 @@ struct TRI_vocbase_t {
   /// when you are done with the collection.
   arangodb::LogicalCollection* useCollection(std::string const& name,
                                              TRI_vocbase_col_status_e&);
+  
+  /// @brief locks a collection for usage by uuid
+  /// Note that this will READ lock the collection you have to release the
+  /// collection lock by yourself and call @ref TRI_ReleaseCollectionVocBase
+  /// when you are done with the collection.
+  arangodb::LogicalCollection* useCollectionByUuid(std::string const& uuid,
+                                                   TRI_vocbase_col_status_e&);
 
   /// @brief releases a collection from usage
   void releaseCollection(arangodb::LogicalCollection* collection);
 
  private:
+
+  /// @brief check some invariants on the various lists of collections
+  void checkCollectionInvariants() const;
+
+  arangodb::LogicalCollection* useCollectionInternal(
+      arangodb::LogicalCollection* collection, TRI_vocbase_col_status_e& status);
+  
   /// @brief looks up a collection by name, without acquiring a lock
   arangodb::LogicalCollection* lookupCollectionNoLock(std::string const& name) const;
 
@@ -386,36 +416,17 @@ struct TRI_vocbase_t {
   bool unregisterView(std::shared_ptr<arangodb::LogicalView> view);
 };
 
-// scope guard for a database
-// ensures that a database
-class VocbaseGuard {
- public:
-  VocbaseGuard() = delete;
-  VocbaseGuard(VocbaseGuard const&) = delete;
-  VocbaseGuard& operator=(VocbaseGuard const&) = delete;
-
-  explicit VocbaseGuard(TRI_vocbase_t* vocbase) : _vocbase(vocbase) {
-    if (!_vocbase->use()) {
-      // database already dropped
-      THROW_ARANGO_EXCEPTION(TRI_ERROR_ARANGO_DATABASE_NOT_FOUND);
-    }
-  }
-  ~VocbaseGuard() { _vocbase->release(); }
-  TRI_vocbase_t* vocbase() const { return _vocbase; }
-
- private:
-  TRI_vocbase_t* _vocbase;
-};
-
 /// @brief extract the _rev attribute from a slice
-TRI_voc_rid_t TRI_ExtractRevisionId(VPackSlice const slice);
+TRI_voc_rid_t TRI_ExtractRevisionId(arangodb::velocypack::Slice const slice);
 
 /// @brief extract the _rev attribute from a slice as a slice
-VPackSlice TRI_ExtractRevisionIdAsSlice(VPackSlice const slice);
+arangodb::velocypack::Slice TRI_ExtractRevisionIdAsSlice(arangodb::velocypack::Slice const slice);
 
 /// @brief sanitize an object, given as slice, builder must contain an
 /// open object which will remain open
-void TRI_SanitizeObject(VPackSlice const slice, VPackBuilder& builder);
-void TRI_SanitizeObjectWithEdges(VPackSlice const slice, VPackBuilder& builder);
+void TRI_SanitizeObject(arangodb::velocypack::Slice const slice,
+                        arangodb::velocypack::Builder& builder);
+void TRI_SanitizeObjectWithEdges(arangodb::velocypack::Slice const slice,
+                                 arangodb::velocypack::Builder& builder);
 
 #endif

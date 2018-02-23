@@ -39,6 +39,77 @@ if (USE_MAINTAINER_MODE AND NOT MSVC)
 endif ()
 
 ################################################################################
+## IResearch
+################################################################################
+
+if (USE_IRESEARCH)
+  find_package(IResearch REQUIRED)
+
+  add_library(${LIB_ARANGO_IRESEARCH}
+    STATIC
+    IResearch/ApplicationServerHelper.h IResearch/ApplicationServerHelper.cpp
+    IResearch/AttributeScorer.cpp IResearch/AttributeScorer.h
+    IResearch/Containers.cpp IResearch/Containers.h
+    IResearch/IResearchAnalyzerFeature.cpp IResearch/IResearchAnalyzerFeature.h
+    IResearch/IResearchAttributes.cpp IResearch/IResearchAttributes.h
+    IResearch/IResearchKludge.cpp IResearch/IResearchKludge.h
+    IResearch/IResearchLink.cpp IResearch/IResearchLink.h
+    IResearch/IResearchLinkMeta.cpp IResearch/IResearchLinkMeta.h
+    IResearch/IResearchMMFilesLink.cpp IResearch/IResearchMMFilesLink.h
+    IResearch/IResearchRocksDBLink.cpp IResearch/IResearchRocksDBLink.h
+    IResearch/IResearchRocksDBRecoveryHelper.cpp
+    IResearch/IResearchRocksDBRecoveryHelper.h
+    IResearch/IResearchView.cpp IResearch/IResearchView.h
+    IResearch/IResearchViewOptimizerRules.cpp IResearch/IResearchViewOptimizerRules.h
+    IResearch/IResearchViewNode.cpp IResearch/IResearchViewNode.h
+    IResearch/IResearchViewBlock.cpp IResearch/IResearchViewBlock.h
+    IResearch/IResearchViewMeta.cpp IResearch/IResearchViewMeta.h
+    IResearch/IResearchFeature.cpp IResearch/IResearchFeature.h
+    IResearch/IResearchDocument.cpp IResearch/IResearchDocument.h
+    IResearch/IResearchFilterFactory.cpp IResearch/IResearchFilterFactory.h
+    IResearch/IResearchOrderFactory.cpp IResearch/IResearchOrderFactory.h
+    IResearch/SystemDatabaseFeature.cpp IResearch/SystemDatabaseFeature.h
+    IResearch/VelocyPackHelper.cpp IResearch/VelocyPackHelper.h
+    IResearch/ExpressionFilter.cpp IResearch/ExpressionFilter.h
+    IResearch/AqlHelper.cpp IResearch/AqlHelper.h
+  )
+
+  target_compile_definitions(${LIB_ARANGO_IRESEARCH}
+    PUBLIC "$<$<CONFIG:Debug>:IRESEARCH_DEBUG=1>"
+  )
+
+  target_include_directories(${LIB_ARANGO_IRESEARCH}
+    PUBLIC ${Boost_INCLUDE_DIR} # for boost/lockfree/queue.hpp from WorkMonitor.h
+    PUBLIC ${IRESEARCH_INCLUDE}
+  )
+
+  if (USE_ENTERPRISE)
+    target_include_directories(${LIB_ARANGO_IRESEARCH}
+      PUBLIC "${PROJECT_SOURCE_DIR}/${ENTERPRISE_INCLUDE_DIR}"
+    )
+  endif()
+
+  if(MSVC)
+    set(IRESEARCH_TARGET_DEPENDENCY iresearch-static-scrt) # use static + staticCRT to match ArangoDB
+  else()
+    set(IRESEARCH_TARGET_DEPENDENCY iresearch-static) # use static to match ArangoDB
+  endif()
+
+  target_link_libraries(${LIB_ARANGO_IRESEARCH}
+    ${IRESEARCH_TARGET_DEPENDENCY}
+    boost_filesystem # required by iResearch
+    boost_locale # required by iResearch
+  )
+
+  add_dependencies(${LIB_ARANGO_IRESEARCH}
+    ${IRESEARCH_TARGET_DEPENDENCY}
+    v8_build # for ICU required by iResearch
+  )
+else()
+  set(LIB_ARANGO_IRESEARCH "")
+endif ()
+
+################################################################################
 ## arangod
 ################################################################################
 
@@ -204,8 +275,11 @@ SET(ARANGOD_SOURCES
   Cluster/FollowerInfo.cpp
   Cluster/DBServerAgencySync.cpp
   Cluster/HeartbeatThread.cpp
+  Cluster/ReplicationTimeoutFeature.cpp
   Cluster/RestAgencyCallbacksHandler.cpp
+  Cluster/RestClusterHandler.cpp
   Cluster/ServerState.cpp
+  Cluster/ShardDistributionReporter.cpp
   Cluster/TraverserEngine.cpp
   Cluster/TraverserEngineRegistry.cpp
   Cluster/v8-cluster.cpp
@@ -239,6 +313,7 @@ SET(ARANGOD_SOURCES
   Graph/Traverser.cpp
   Graph/TraverserOptions.cpp
   Indexes/Index.cpp
+  Indexes/IndexFactory.cpp
   Indexes/IndexIterator.cpp
   Indexes/IndexLookupContext.cpp
   Indexes/SimpleAttributeEqualityMatcher.cpp
@@ -267,16 +342,33 @@ SET(ARANGOD_SOURCES
   Pregel/Recovery.cpp
   Pregel/Utils.cpp
   Pregel/Worker.cpp
+  Pregel/Worker-templates-native-types.cpp
+  Pregel/Worker-templates-algorithms.cpp
   Pregel/WorkerConfig.cpp
-  Replication/ContinuousSyncer.cpp
+  Replication/DatabaseReplicationApplier.cpp
+  Replication/GlobalReplicationApplier.cpp
+  Replication/GlobalInitialSyncer.cpp
+  Replication/DatabaseInitialSyncer.cpp
+  Replication/DatabaseTailingSyncer.cpp
+  Replication/GlobalInitialSyncer.cpp
+  Replication/GlobalTailingSyncer.cpp
   Replication/InitialSyncer.cpp
+  Replication/ReplicationApplier.cpp
+  Replication/ReplicationApplierConfiguration.cpp
+  Replication/ReplicationApplierState.cpp
+  Replication/ReplicationFeature.cpp
   Replication/Syncer.cpp
+  Replication/TailingSyncer.cpp
+  Replication/common-defines.cpp
   RestHandler/RestAdminLogHandler.cpp
   RestHandler/RestAdminRoutingHandler.cpp
+  RestHandler/RestAdminServerHandler.cpp
   RestHandler/RestAqlFunctionsHandler.cpp
+  RestHandler/RestAqlUserFunctionsHandler.cpp
   RestHandler/RestAuthHandler.cpp
   RestHandler/RestBaseHandler.cpp
   RestHandler/RestBatchHandler.cpp
+  RestHandler/RestCollectionHandler.cpp
   RestHandler/RestCursorHandler.cpp
   RestHandler/RestDatabaseHandler.cpp
   RestHandler/RestDebugHandler.cpp
@@ -304,6 +396,7 @@ SET(ARANGOD_SOURCES
   RestHandler/RestVersionHandler.cpp
   RestHandler/RestViewHandler.cpp
   RestHandler/RestVocbaseBaseHandler.cpp
+  RestHandler/RestWalAccessHandler.cpp
   RestHandler/WorkMonitorHandler.cpp
   RestServer/AqlFeature.cpp
   RestServer/BootstrapFeature.cpp
@@ -315,6 +408,7 @@ SET(ARANGOD_SOURCES
   RestServer/EndpointFeature.cpp
   RestServer/FeatureCacheFeature.cpp
   RestServer/FileDescriptorsFeature.cpp
+  RestServer/FlushFeature.cpp
   RestServer/FrontendFeature.cpp
   RestServer/InitDatabaseFeature.cpp
   RestServer/LockfileFeature.cpp
@@ -345,10 +439,12 @@ SET(ARANGOD_SOURCES
   Statistics/RequestStatistics.cpp
   Statistics/ServerStatistics.cpp
   Statistics/StatisticsFeature.cpp
+  Statistics/StatisticsWorker.cpp
   StorageEngine/EngineSelectorFeature.cpp
   StorageEngine/PhysicalCollection.cpp
   StorageEngine/TransactionCollection.cpp
   StorageEngine/TransactionState.cpp
+  StorageEngine/WalAccess.cpp
   Transaction/Context.cpp
   Transaction/Helpers.cpp
   Transaction/Methods.cpp
@@ -362,7 +458,9 @@ SET(ARANGOD_SOURCES
   Utils/CollectionNameResolver.cpp
   Utils/Cursor.cpp
   Utils/CursorRepository.cpp
+  Utils/DatabaseGuard.cpp
   Utils/ExecContext.cpp
+  Utils/FlushThread.cpp
   Utils/OperationCursor.cpp
   Utils/SingleCollectionTransaction.cpp
   Utils/WorkMonitorArangod.cpp
@@ -378,6 +476,7 @@ SET(ARANGOD_SOURCES
   V8Server/v8-statistics.cpp
   V8Server/v8-users.cpp
   V8Server/v8-user-structures.cpp
+  V8Server/v8-user-functions.cpp
   V8Server/v8-util.cpp
   V8Server/v8-views.cpp
   V8Server/v8-vocbase.cpp
@@ -388,6 +487,7 @@ SET(ARANGOD_SOURCES
   VocBase/Methods/Databases.cpp
   VocBase/Methods/Indexes.cpp
   VocBase/Methods/Transactions.cpp
+  VocBase/Methods/AqlUserFunctions.cpp
   VocBase/AuthInfo.cpp
   VocBase/AuthUserEntry.cpp
   VocBase/Graphs.cpp
@@ -395,9 +495,6 @@ SET(ARANGOD_SOURCES
   VocBase/LogicalCollection.cpp
   VocBase/LogicalView.cpp
   VocBase/ManagedDocumentResult.cpp
-  VocBase/modes.cpp
-  VocBase/replication-applier.cpp
-  VocBase/replication-common.cpp
   VocBase/ticks.cpp
   VocBase/vocbase.cpp
   ${ADDITIONAL_BIN_ARANGOD_SOURCES}
@@ -420,6 +517,7 @@ target_link_libraries(arangoserver
   ${MSVC_LIBS}
   ${V8_LIBS}
   ${ROCKSDB_LIBS}
+  ${LIB_ARANGO_IRESEARCH}
   boost_boost
   boost_system
   ${SYSTEM_LIBRARIES}
@@ -436,6 +534,7 @@ if (USE_ENTERPRISE)
     target_link_libraries(arangoserver
       ldap
       lber
+      ${OPENSSL_LIBRARIES}
     )
   endif()
 endif()
@@ -458,9 +557,9 @@ install(
 install_config(arangod)
 
 if (NOT USE_PRECOMPILED_V8)
-  add_dependencies(arangod zlibstatic v8_build)
+  add_dependencies(arangod zlibstatic v8_build ${LIB_ARANGO_IRESEARCH})
 else ()
-  add_dependencies(arangod zlibstatic)
+  add_dependencies(arangod zlibstatic ${LIB_ARANGO_IRESEARCH})
 endif ()
 
 if (USE_JEMALLOC)

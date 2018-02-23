@@ -21,12 +21,15 @@
 /// @author Daniel H. Larkin
 ////////////////////////////////////////////////////////////////////////////////
 
-#include "RocksDBEngine/RocksDBReplicationContext.h"
+#include "RocksDBReplicationContext.h"
 #include "Basics/StaticStrings.h"
 #include "Basics/StringBuffer.h"
 #include "Basics/StringRef.h"
 #include "Basics/VPackStringBufferAdapter.h"
 #include "Logger/Logger.h"
+#include "Replication/common-defines.h"
+#include "Replication/InitialSyncer.h"
+#include "RestServer/DatabaseFeature.h"
 #include "RocksDBEngine/RocksDBCollection.h"
 #include "RocksDBEngine/RocksDBCommon.h"
 #include "RocksDBEngine/RocksDBIterators.h"
@@ -37,8 +40,8 @@
 #include "Transaction/UserTransaction.h"
 #include "Utils/DatabaseGuard.h"
 #include "Utils/ExecContext.h"
-#include "VocBase/replication-common.h"
 #include "VocBase/ticks.h"
+#include "VocBase/vocbase.h"
 
 #include <velocypack/Dumper.h>
 #include <velocypack/velocypack-aliases.h>
@@ -47,20 +50,20 @@ using namespace arangodb;
 using namespace arangodb::rocksutils;
 using namespace arangodb::velocypack;
 
-double const RocksDBReplicationContext::DefaultTTL = 30 * 60.0;
-
-RocksDBReplicationContext::RocksDBReplicationContext()
-    : _id(TRI_NewTickServer()),
+RocksDBReplicationContext::RocksDBReplicationContext(TRI_vocbase_t* vocbase, double ttl, TRI_server_id_t serverId)
+    : _vocbase(vocbase),
+      _serverId(serverId),
+      _id(TRI_NewTickServer()),
       _lastTick(0),
       _currentTick(0),
       _trx(),
       _collection(nullptr),
-      _iter(),
+      _lastIteratorOffset(0),
       _mdr(),
       _customTypeHandler(),
       _vpackOptions(Options::Defaults),
-      _lastIteratorOffset(0),
-      _expires(TRI_microtime() + DefaultTTL),
+      _ttl(ttl),
+      _expires(TRI_microtime() + _ttl),
       _isDeleted(false),
       _isUsed(true),
       _hasMore(true) {}
@@ -82,36 +85,66 @@ uint64_t RocksDBReplicationContext::count() const {
 
 // creates new transaction/snapshot
 void RocksDBReplicationContext::bind(TRI_vocbase_t* vocbase) {
-  if ((_trx.get() == nullptr) || (_trx->vocbase() != vocbase)) {
+  if (!_trx || !_guard || (_guard->database() != vocbase)) {
+    rocksdb::Snapshot const* snap = nullptr;
+    if (_trx) {
+      auto state = RocksDBTransactionState::toState(_trx.get());
+      snap = state->stealSnapshot();
+      _trx->abort();
+      _trx.reset();
+    }
+    
     releaseDumpingResources();
-    _trx = createTransaction(vocbase);
+    
+    _guard.reset(new DatabaseGuard(vocbase));
+    transaction::Options transactionOptions;
+    transactionOptions.waitForSync = false;
+    transactionOptions.allowImplicitCollections = true;
+    
+    auto ctx = transaction::StandaloneContext::Create(vocbase);
+    _trx.reset(new transaction::UserTransaction(ctx, {}, {}, {},
+                                                transactionOptions));
     auto state = RocksDBTransactionState::toState(_trx.get());
+    if (snap != nullptr) {
+      state->donateSnapshot(snap);
+      TRI_ASSERT(snap->GetSequenceNumber() == state->sequenceNumber());
+    }
+    Result res = _trx->begin();
+    if (!res.ok()) {
+      _guard.reset();
+      THROW_ARANGO_EXCEPTION(res);
+    }
+    _customTypeHandler = ctx->orderCustomTypeHandler();
+    _vpackOptions.customTypeHandler = _customTypeHandler.get();
     _lastTick = state->sequenceNumber();
   }
 }
 
 int RocksDBReplicationContext::bindCollection(
-    std::string const& collectionName) {
+    TRI_vocbase_t* vocbase,
+    std::string const& collectionIdentifier) {
+  bind(vocbase);
+  
   if ((_collection == nullptr) ||
-      ((_collection->name() != collectionName) &&
-       std::to_string(_collection->cid()) != collectionName)) {
-    _collection = _trx->vocbase()->lookupCollection(collectionName);
+      ((_collection->name() != collectionIdentifier) &&
+       std::to_string(_collection->cid()) != collectionIdentifier &&
+       _collection->globallyUniqueId() != collectionIdentifier)) {
+    _collection = _trx->vocbase()->lookupCollection(collectionIdentifier);
     if (_collection == nullptr) {
       return TRI_ERROR_BAD_PARAMETER;
     }
     
     // we are getting into trouble during the dumping of "_users"
     // this workaround avoids the auth check in addCollectionAtRuntime
-    ExecContext* old = ExecContext::CURRENT;
+    ExecContext const* old = ExecContext::CURRENT;
     if (old != nullptr && old->systemAuthLevel() == AuthLevel::RW) {
       ExecContext::CURRENT = nullptr;
     }
     TRI_DEFER(ExecContext::CURRENT = old);
 
-    _trx->addCollectionAtRuntime(collectionName);
+    _trx->addCollectionAtRuntime(_collection->name());
     _iter = static_cast<RocksDBCollection*>(_collection->getPhysical())
-                ->getSortedAllIterator(_trx.get(),
-                                       &_mdr);  //_mdr is not used nor updated
+                ->getSortedAllIterator(_trx.get());
     _currentTick = 1;
     _hasMore = true;
   }
@@ -121,48 +154,73 @@ int RocksDBReplicationContext::bindCollection(
 // returns inventory
 std::pair<RocksDBReplicationResult, std::shared_ptr<VPackBuilder>>
 RocksDBReplicationContext::getInventory(TRI_vocbase_t* vocbase,
-                                        bool includeSystem) {
+                                        bool includeSystem,
+                                        bool global) {
   TRI_ASSERT(vocbase != nullptr);
-  if (_trx.get() == nullptr) {
+  if (!_trx) {
     return std::make_pair(
         RocksDBReplicationResult(TRI_ERROR_BAD_PARAMETER, _lastTick),
         std::shared_ptr<VPackBuilder>(nullptr));
   }
 
-  auto tick = TRI_CurrentTickServer();
-  std::shared_ptr<VPackBuilder> inventory = vocbase->inventory(
-      tick, filterCollection, &includeSystem, true, sortCollections);
+  auto nameFilter = [includeSystem](LogicalCollection const* collection) {
+    std::string const cname = collection->name();
+    if (!includeSystem && !cname.empty() && cname[0] == '_') {
+      // exclude all system collections
+      return false;
+    }
 
-  return std::make_pair(RocksDBReplicationResult(TRI_ERROR_NO_ERROR, _lastTick),
-                        inventory);
+    if (TRI_ExcludeCollectionReplication(cname, includeSystem)) {
+      // collection is excluded from replication
+      return false;
+    }
+
+    // all other cases should be included
+    return true;
+  };
+
+  auto tick = TRI_CurrentTickServer();
+
+  if (global) {
+    // global inventory
+    auto builder = std::make_shared<VPackBuilder>();
+    DatabaseFeature::DATABASE->inventory(*builder.get(), tick, nameFilter);
+    return std::make_pair(RocksDBReplicationResult(TRI_ERROR_NO_ERROR, _lastTick),
+                          builder);
+  } else {
+    // database-specific inventory
+    auto builder = std::make_shared<VPackBuilder>();
+    vocbase->inventory(*builder.get(), tick, nameFilter);
+
+    return std::make_pair(RocksDBReplicationResult(TRI_ERROR_NO_ERROR, _lastTick),
+                          builder);
+  }
 }
 
 // iterates over at most 'limit' documents in the collection specified,
 // creating a new iterator if one does not exist for this collection
 RocksDBReplicationResult RocksDBReplicationContext::dump(
     TRI_vocbase_t* vocbase, std::string const& collectionName,
-    basics::StringBuffer& buff, uint64_t chunkSize, bool compat28) {
+    basics::StringBuffer& buff, uint64_t chunkSize) {
   TRI_ASSERT(vocbase != nullptr);
-  if (_trx.get() == nullptr) {
+  if (!_trx) {
     return RocksDBReplicationResult(TRI_ERROR_BAD_PARAMETER, _lastTick);
   }
-  int res = bindCollection(collectionName);
+  int res = bindCollection(vocbase, collectionName);
   if (res != TRI_ERROR_NO_ERROR) {
     return RocksDBReplicationResult(res, _lastTick);
+  }
+  if (!_iter) {
+    return RocksDBReplicationResult(TRI_ERROR_BAD_PARAMETER, "the replication context iterator has not been initialized", _lastTick);
   }
 
   // set type
   int type = REPLICATION_MARKER_DOCUMENT;  // documents
-  if (compat28 && (_collection->type() == TRI_COL_TYPE_EDGE)) {
-    type = 2301;  // 2.8 compatibility edges
-  }
-
   arangodb::basics::VPackStringBufferAdapter adapter(buff.stringBuffer());
 
   VPackBuilder builder(&_vpackOptions);
 
-  auto cb = [this, &type, &buff, &adapter, &compat28,
-             &builder](LocalDocumentId const& documentId) {
+  auto cb = [this, &type, &buff, &adapter, &builder](LocalDocumentId const& documentId) {
     builder.clear();
 
     builder.openObject();
@@ -179,20 +237,18 @@ RocksDBReplicationResult RocksDBReplicationContext::dump(
     }
 
     builder.add(VPackValue("data"));
-    auto key = VPackSlice(_mdr.vpack()).get(StaticStrings::KeyString);
     _mdr.addToBuilder(builder, false);
-    if (compat28) {
-      builder.add("key", key);
-    }
     builder.close();
 
-    VPackDumper dumper(
-        &adapter,
-        &_vpackOptions);  // note: we need the CustomTypeHandler here
+    // note: we need the CustomTypeHandler here
+    VPackDumper dumper( &adapter,
+        &_vpackOptions);
     VPackSlice slice = builder.slice();
     dumper.dump(slice);
     buff.appendChar('\n');
   };
+  
+  TRI_ASSERT(_iter);
 
   while (_hasMore && buff.length() < chunkSize) {
     try {
@@ -205,7 +261,7 @@ RocksDBReplicationResult RocksDBReplicationContext::dump(
       return ex;
     }
   }
-
+  
   if (_hasMore) {
     _currentTick++;
   }
@@ -215,15 +271,15 @@ RocksDBReplicationResult RocksDBReplicationContext::dump(
 
 arangodb::Result RocksDBReplicationContext::dumpKeyChunks(VPackBuilder& b,
                                                           uint64_t chunkSize) {
-  Result rv;
-
   TRI_ASSERT(_trx);
-  if(!_iter){
+
+  Result rv;
+  if (!_iter) {
     return rv.reset(TRI_ERROR_BAD_PARAMETER, "the replication context iterator has not been initialized");
   }
 
   std::string lowKey;
-  VPackSlice highKey;  // FIXME: no good keeping this
+  VPackSlice highKey; // points into document owned by _mdr
   uint64_t hash = 0x012345678;
   auto cb = [&](LocalDocumentId const& documentId) {
     bool ok = _collection->readDocument(_trx.get(), documentId, _mdr);
@@ -256,7 +312,7 @@ arangodb::Result RocksDBReplicationContext::dumpKeyChunks(VPackBuilder& b,
       }
       b.add(VPackValue(VPackValueType::Object));
       b.add("low", VPackValue(lowKey));
-      b.add("high", VPackValue(highKey.copyString()));
+      b.add("high", highKey);
       b.add("hash", VPackValue(std::to_string(hash)));
       b.close();
       lowKey.clear();  // reset string
@@ -281,11 +337,11 @@ arangodb::Result RocksDBReplicationContext::dumpKeys(
   TRI_ASSERT(_trx);
 
   Result rv;
-
-  if(!_iter){
+  if (!_iter) {
     return rv.reset(TRI_ERROR_BAD_PARAMETER, "the replication context iterator has not been initialized");
   }
 
+  TRI_ASSERT(_iter);
   RocksDBSortedAllIterator* primary =
       static_cast<RocksDBSortedAllIterator*>(_iter.get());
 
@@ -321,36 +377,23 @@ arangodb::Result RocksDBReplicationContext::dumpKeys(
     }
   }
 
-  auto cb = [&](LocalDocumentId const& documentId, StringRef const& key) {
+  auto cb = [&](LocalDocumentId const& documentId, VPackSlice slice) {
+    TRI_voc_rid_t revisionId = 0;
+    VPackSlice key;
+    transaction::helpers::extractKeyAndRevFromDocument(slice, key, revisionId);
+
+    TRI_ASSERT(key.isString());
+    
     b.openArray();
-    b.add(VPackValuePair(key.data(), key.size(), VPackValueType::String));
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    b.add(VPackValue(std::to_string(documentId.id()))); // TODO: must return the revision here 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
+    b.add(key);
+    b.add(VPackValue(TRI_RidToString(revisionId)));
     b.close();
   };
 
   b.openArray();
   // chunkSize is going to be ignored here
   try {
-    _hasMore = primary->nextWithKey(cb, chunkSize);
+    _hasMore = primary->nextDocument(cb, chunkSize);
     _lastIteratorOffset++;
   } catch (std::exception const&) {
     return rv.reset(TRI_ERROR_INTERNAL);
@@ -362,13 +405,12 @@ arangodb::Result RocksDBReplicationContext::dumpKeys(
 
 /// dump keys and document
 arangodb::Result RocksDBReplicationContext::dumpDocuments(
-    VPackBuilder& b, size_t chunk, size_t chunkSize, std::string const& lowKey,
-    VPackSlice const& ids) {
-  Result rv;
-
+    VPackBuilder& b, size_t chunk, size_t chunkSize, size_t offsetInChunk,
+    size_t maxChunkSize, std::string const& lowKey, VPackSlice const& ids) {
   TRI_ASSERT(_trx);
 
-  if(!_iter){
+  Result rv;
+  if (!_iter) {
     return rv.reset(TRI_ERROR_BAD_PARAMETER, "the replication context iterator has not been initialized");
   }
 
@@ -418,9 +460,12 @@ arangodb::Result RocksDBReplicationContext::dumpDocuments(
     b.add(current);
   };
 
+  auto buffer = b.buffer();
   bool hasMore = true;
   b.openArray();
   size_t oldPos = from;
+  size_t offset = 0;
+  
   for (auto const& it : VPackArrayIterator(ids)) {
     if (!it.isNumber()) {
       return Result(TRI_ERROR_BAD_PARAMETER);
@@ -438,9 +483,26 @@ arangodb::Result RocksDBReplicationContext::dumpDocuments(
       TRI_ASSERT(ignore == newPos - oldPos);
       _lastIteratorOffset += ignore;
     }
-    hasMore = _iter->next(cb, 1);
+
+    bool full = false;
+    if (offset < offsetInChunk) {
+      // skip over the initial few documents
+      hasMore = _iter->next([&b](LocalDocumentId const&) {
+        b.add(VPackValue(VPackValueType::Null));
+      }, 1);
+    } else {
+      hasMore = _iter->next(cb, 1);
+      if (buffer->byteSize() > maxChunkSize) {
+        // result is big enough so that we abort prematurely
+        full = true;
+      }
+    }
     _lastIteratorOffset++;
     oldPos = newPos + 1;
+    ++offset;
+    if (full) {
+      break;
+    }
   }
   b.close();
   _hasMore = hasMore;
@@ -462,84 +524,39 @@ void RocksDBReplicationContext::use(double ttl) {
   TRI_ASSERT(!_isUsed);
 
   _isUsed = true;
+  if (_ttl > 0.0) {
+    ttl = _ttl;
+  } else {
+    ttl = InitialSyncer::defaultBatchTimeout;
+  }
   _expires = TRI_microtime() + ttl;
-}
-
-void RocksDBReplicationContext::adjustTtl(double ttl) {
-  TRI_ASSERT(_isUsed);
-
-  _expires = TRI_microtime() + ttl;
+  if (_serverId != 0) {
+    _vocbase->updateReplicationClient(_serverId, ttl);
+  }
 }
 
 void RocksDBReplicationContext::release() {
   TRI_ASSERT(_isUsed);
   _isUsed = false;
+  if (_serverId != 0) {
+    double ttl;
+    if (_ttl > 0.0) {
+      // use TTL as configured
+      ttl = _ttl;
+    } else {
+      // none configuration. use default
+      ttl = InitialSyncer::defaultBatchTimeout;
+    }
+    _vocbase->updateReplicationClient(_serverId, ttl);
+  }
 }
 
 void RocksDBReplicationContext::releaseDumpingResources() {
-  if (_trx.get() != nullptr) {
+  _iter.reset();
+  if (_trx != nullptr) {
     _trx->abort();
     _trx.reset();
   }
-  if (_iter.get() != nullptr) {
-    _iter.reset();
-  }
   _collection = nullptr;
   _guard.reset();
-}
-
-std::unique_ptr<transaction::Methods>
-RocksDBReplicationContext::createTransaction(TRI_vocbase_t* vocbase) {
-  _guard.reset(new DatabaseGuard(vocbase));
-
-  transaction::Options transactionOptions;
-  transactionOptions.waitForSync = false;
-  transactionOptions.allowImplicitCollections = true;
-
-  std::shared_ptr<transaction::StandaloneContext> ctx =
-      transaction::StandaloneContext::Create(vocbase);
-  std::unique_ptr<transaction::Methods> trx(
-      new transaction::UserTransaction(ctx, {}, {}, {}, transactionOptions));
-  Result res = trx->begin();
-  if (!res.ok()) {
-    _guard.reset();
-    THROW_ARANGO_EXCEPTION(res);
-  }
-  _customTypeHandler = ctx->orderCustomTypeHandler();
-  _vpackOptions.customTypeHandler = _customTypeHandler.get();
-
-  return trx;
-}
-
-/// @brief filter a collection based on collection attributes
-bool RocksDBReplicationContext::filterCollection(
-    arangodb::LogicalCollection* collection, void* data) {
-  bool includeSystem = *((bool*)data);
-
-  std::string const collectionName(collection->name());
-
-  if (!includeSystem && collectionName[0] == '_') {
-    // exclude all system collections
-    return false;
-  }
-
-  if (TRI_ExcludeCollectionReplication(collectionName.c_str(), includeSystem)) {
-    // collection is excluded from replication
-    return false;
-  }
-
-  // all other cases should be included
-  return true;
-}
-
-bool RocksDBReplicationContext::sortCollections(
-    arangodb::LogicalCollection const* l,
-    arangodb::LogicalCollection const* r) {
-  if (l->type() != r->type()) {
-    return l->type() < r->type();
-  }
-  std::string const leftName = l->name();
-  std::string const rightName = r->name();
-
-  return strcasecmp(leftName.c_str(), rightName.c_str()) < 0;
 }

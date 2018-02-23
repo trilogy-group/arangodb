@@ -26,15 +26,19 @@
 
 #include "Basics/HybridLogicalClock.h"
 #include "Basics/tri-strings.h"
+#include "Cluster/ServerState.h"
+#include "GeneralServer/AuthenticationFeature.h"
 #include "GeneralServer/GeneralServer.h"
 #include "GeneralServer/GeneralServerFeature.h"
 #include "GeneralServer/RestHandler.h"
 #include "GeneralServer/RestHandlerFactory.h"
 #include "GeneralServer/VstCommTask.h"
 #include "Meta/conversion.h"
+#include "Replication/ReplicationFeature.h"
 #include "Rest/HttpRequest.h"
 #include "Statistics/ConnectionStatistics.h"
 #include "Utils/Events.h"
+#include "VocBase/AuthInfo.h"
 #include "VocBase/ticks.h"
 
 using namespace arangodb;
@@ -71,28 +75,29 @@ HttpCommTask::HttpCommTask(EventLoop loop, GeneralServer* server,
 }
 
 void HttpCommTask::handleSimpleError(rest::ResponseCode code, GeneralRequest const& req, uint64_t /* messageId */) {
-  std::unique_ptr<GeneralResponse> response(new HttpResponse(code));
-  response->setContentType(req.contentTypeResponse());
-  addResponse(response.get(), stealStatistics(1UL));
+  HttpResponse response(code, leaseStringBuffer(0));
+  response.setContentType(req.contentTypeResponse());
+  addResponse(&response, stealStatistics(1UL));
 }
 
 void HttpCommTask::handleSimpleError(rest::ResponseCode code, GeneralRequest const& req, int errorNum,
                                      std::string const& errorMessage,
                                      uint64_t /* messageId */) {
-  std::unique_ptr<GeneralResponse> response(new HttpResponse(code));
-  response->setContentType(req.contentTypeResponse());
-
-  VPackBuilder builder;
+  
+  VPackBuffer<uint8_t> buffer;
+  VPackBuilder builder(buffer);
   builder.openObject();
   builder.add(StaticStrings::Error, VPackValue(true));
   builder.add(StaticStrings::ErrorNum, VPackValue(errorNum));
   builder.add(StaticStrings::ErrorMessage, VPackValue(errorMessage));
   builder.add(StaticStrings::Code, VPackValue((int)code));
   builder.close();
-
+  
   try {
-    response->setPayload(builder.slice(), true, VPackOptions::Defaults);
-    addResponse(response.get(), stealStatistics(1UL));
+    HttpResponse resp(code, leaseStringBuffer(buffer.size()));
+    resp.setContentType(req.contentTypeResponse());
+    resp.setPayload(std::move(buffer), true, VPackOptions::Defaults);
+    addResponse(&resp, stealStatistics(1UL));
   } catch (std::exception const& ex) {
     LOG_TOPIC(WARN, Logger::COMMUNICATION)
         << "handleSimpleError received an exception, closing connection:"
@@ -105,9 +110,15 @@ void HttpCommTask::handleSimpleError(rest::ResponseCode code, GeneralRequest con
   }
 }
 
-void HttpCommTask::addResponse(HttpResponse* response,
+void HttpCommTask::addResponse(GeneralResponse* baseResponse,
                                RequestStatistics* stat) {
   _lock.assertLockedByCurrentThread();
+#ifdef ARANGODB_ENABLE_MAINTAINER_MODE
+  HttpResponse* response = dynamic_cast<HttpResponse*>(baseResponse);
+  TRI_ASSERT(response != nullptr);
+#else
+  HttpResponse* response = static_cast<HttpResponse*>(baseResponse);
+#endif
 
   resetKeepAlive();
 
@@ -188,7 +199,7 @@ void HttpCommTask::addResponse(HttpResponse* response,
         << "\"," << stat->timingsCsv();
   }
 
-  addWriteBuffer(buffer);
+  addWriteBuffer(std::move(buffer));
 
   // and give some request information
   LOG_TOPIC(INFO, Logger::REQUESTS)
@@ -200,15 +211,16 @@ void HttpCommTask::addResponse(HttpResponse* response,
       << _originalBodyLength << "," << responseBodyLength << ",\"" << _fullUrl
       << "\"," << Logger::FIXED(totalTime, 6);
 
-  // clear body
-  response->body().clear();
+  std::unique_ptr<basics::StringBuffer> body = response->stealBody();
+  returnStringBuffer(body.release()); // takes care of deleting
 }
 
 // reads data from the socket
 // caller must hold the _lock
 bool HttpCommTask::processRead(double startTime) {
+  _lock.assertLockedByCurrentThread();
+  
   cancelKeepAlive();
-
   TRI_ASSERT(_readBuffer.c_str() != nullptr);
 
   if (_requestPending) {
@@ -285,7 +297,7 @@ bool HttpCommTask::processRead(double startTime) {
       if (!abandon()) {
         THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "task is already abandoned");
       }
-      
+
       std::shared_ptr<GeneralCommTask> commTask = std::make_shared<VstCommTask>(
           _loop, _server, std::move(_peer), std::move(_connectionInfo),
           GeneralServerFeature::keepAliveTimeout(), 
@@ -321,9 +333,8 @@ bool HttpCommTask::processRead(double startTime) {
       // request context for that request
       _incompleteRequest.reset(
           new HttpRequest(_connectionInfo, sptr, slen, _allowMethodOverride));
-
-      GeneralServerFeature::HANDLER_FACTORY->setRequestContext(
-          _incompleteRequest.get());
+      //GeneralServerFeature::HANDLER_FACTORY->setRequestContext(
+      //    _incompleteRequest.get());
       _incompleteRequest->setClientTaskId(_taskId);
 
       // check HTTP protocol version
@@ -460,12 +471,10 @@ bool HttpCommTask::processRead(double startTime) {
           LOG_TOPIC(TRACE, arangodb::Logger::FIXME) << "received a 100-continue request";
 
           WriteBuffer buffer(new StringBuffer(false), nullptr);
-
           buffer._buffer->appendText(
               TRI_CHAR_LENGTH_PAIR("HTTP/1.1 100 (Continue)\r\n\r\n"));
           buffer._buffer->ensureNullTerminated();
-
-          addWriteBuffer(buffer);
+          addWriteBuffer(std::move(buffer));
         }
       }
     } else {
@@ -581,23 +590,21 @@ bool HttpCommTask::processRead(double startTime) {
     } else {
       processRequest(std::move(_incompleteRequest));
     }
-  }
-  // not found
-  else if (authResult == rest::ResponseCode::NOT_FOUND) {
+  } else if (authResult == rest::ResponseCode::NOT_FOUND) { // not found
     handleSimpleError(authResult, *_incompleteRequest, TRI_ERROR_ARANGO_DATABASE_NOT_FOUND,
                       TRI_errno_string(TRI_ERROR_ARANGO_DATABASE_NOT_FOUND), 1);
-  }
-  // forbidden
-  else if (authResult == rest::ResponseCode::FORBIDDEN) {
-    handleSimpleError(authResult, *_incompleteRequest, TRI_ERROR_USER_CHANGE_PASSWORD,
-                      "change password", 1);
-  } else {  // not authenticated
-    HttpResponse response(rest::ResponseCode::UNAUTHORIZED);
-    std::string realm = "Bearer token_type=\"JWT\", realm=\"ArangoDB\"";
-
-    response.setHeaderNC(StaticStrings::WwwAuthenticate, std::move(realm));
-
-    processResponse(&response);
+  } else {  // not authenticated, might be because _users is out of sync
+    ServerState::Mode mode = ServerState::serverMode();
+    if (mode == ServerState::Mode::REDIRECT || mode == ServerState::Mode::TRYAGAIN) {
+      HttpResponse resp(rest::ResponseCode::SERVICE_UNAVAILABLE, leaseStringBuffer(0));
+      ReplicationFeature::prepareFollowerResponse(&resp, mode);
+      addResponse(&resp, nullptr);
+    } else {
+      std::string realm = "Bearer token_type=\"JWT\", realm=\"ArangoDB\"";
+      HttpResponse resp(rest::ResponseCode::UNAUTHORIZED, leaseStringBuffer(0));
+      resp.setHeaderNC(StaticStrings::WwwAuthenticate, std::move(realm));
+      addResponse(&resp, nullptr);
+    }
   }
 
   _incompleteRequest.reset(nullptr);
@@ -605,6 +612,7 @@ bool HttpCommTask::processRead(double startTime) {
 }
 
 void HttpCommTask::processRequest(std::unique_ptr<HttpRequest> request) {
+  _lock.assertLockedByCurrentThread();
   {
     LOG_TOPIC(DEBUG, Logger::REQUESTS)
         << "\"http-request-begin\",\"" << (void*)this << "\",\""
@@ -644,15 +652,14 @@ void HttpCommTask::processRequest(std::unique_ptr<HttpRequest> request) {
         << "\"http-request-source\",\"" << (void*)this << "\",\""
         << source << "\"";
   }
-
+    
   // create a handler and execute
-  std::unique_ptr<GeneralResponse> response(
-      new HttpResponse(rest::ResponseCode::SERVER_ERROR));
+  auto resp = std::make_unique<HttpResponse>(rest::ResponseCode::SERVER_ERROR,
+                                             leaseStringBuffer(1024));
+  resp->setContentType(request->contentTypeResponse());
+  resp->setContentTypeRequested(request->contentTypeResponse());
 
-  response->setContentType(request->contentTypeResponse());
-  response->setContentTypeRequested(request->contentTypeResponse());
-
-  executeRequest(std::move(request), std::move(response));
+  executeRequest(std::move(request), std::move(resp));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -701,9 +708,9 @@ bool HttpCommTask::checkContentLength(HttpRequest* request,
 }
 
 void HttpCommTask::processCorsOptions(std::unique_ptr<HttpRequest> request) {
-  HttpResponse response(rest::ResponseCode::OK);
+  HttpResponse resp(rest::ResponseCode::OK, leaseStringBuffer(0));
 
-  response.setHeaderNCIfNotSet(StaticStrings::Allow,
+  resp.setHeaderNCIfNotSet(StaticStrings::Allow,
                                StaticStrings::CorsMethods);
 
   if (!_origin.empty()) {
@@ -713,8 +720,8 @@ void HttpCommTask::processCorsOptions(std::unique_ptr<HttpRequest> request) {
 
     // send back which HTTP methods are allowed for the resource
     // we'll allow all
-    response.setHeaderNCIfNotSet(StaticStrings::AccessControlAllowMethods,
-                                 StaticStrings::CorsMethods);
+    resp.setHeaderNCIfNotSet(StaticStrings::AccessControlAllowMethods,
+                              StaticStrings::CorsMethods);
 
     if (!allowHeaders.empty()) {
       // allow all extra headers the client requested
@@ -722,24 +729,24 @@ void HttpCommTask::processCorsOptions(std::unique_ptr<HttpRequest> request) {
       // client sends some broken headers and then later cannot access the data
       // on
       // the server. that's a client problem.
-      response.setHeaderNCIfNotSet(StaticStrings::AccessControlAllowHeaders,
-                                   allowHeaders);
+      resp.setHeaderNCIfNotSet(StaticStrings::AccessControlAllowHeaders,
+                                allowHeaders);
 
       LOG_TOPIC(TRACE, arangodb::Logger::FIXME) << "client requested validation of the following headers: "
                  << allowHeaders;
     }
 
     // set caching time (hard-coded value)
-    response.setHeaderNCIfNotSet(StaticStrings::AccessControlMaxAge,
-                                 StaticStrings::N1800);
+    resp.setHeaderNCIfNotSet(StaticStrings::AccessControlMaxAge,
+                              StaticStrings::N1800);
   }
 
-  processResponse(&response);
+  addResponse(&resp, nullptr);
 }
 
 std::unique_ptr<GeneralResponse> HttpCommTask::createResponse(
     rest::ResponseCode responseCode, uint64_t /* messageId */) {
-  return std::unique_ptr<GeneralResponse>(new HttpResponse(responseCode));
+  return std::make_unique<HttpResponse>(responseCode,leaseStringBuffer(0));
 }
 
 void HttpCommTask::compactify() {
@@ -793,7 +800,8 @@ void HttpCommTask::resetState() {
 }
 
 rest::ResponseCode HttpCommTask::authenticateRequest(HttpRequest* request) {
-  // first scape the auth headers and try to authenticate the user
+  // first scape the auth headers and try to determine
+  // and authenticate the user
   ResponseCode code = handleAuthHeader(request);
   if (code != ResponseCode::SERVER_ERROR) {
     // now populate the VocbaseContext
@@ -802,12 +810,10 @@ rest::ResponseCode HttpCommTask::authenticateRequest(HttpRequest* request) {
       GeneralServerFeature::HANDLER_FACTORY->setRequestContext(request);
       if (!res) {
         return rest::ResponseCode::NOT_FOUND;
-      }
-      if (request->requestContext() == nullptr) {
+      } else if (request->requestContext() == nullptr) {
         return rest::ResponseCode::SERVER_ERROR;
       }
     }
-    
     
     // will determine if the user can access this path
     // checks db permissions and contains exceptions for the
@@ -820,7 +826,7 @@ rest::ResponseCode HttpCommTask::authenticateRequest(HttpRequest* request) {
 ResponseCode HttpCommTask::handleAuthHeader(HttpRequest* request) const {
   bool found;
   std::string const& authStr =
-  request->header(StaticStrings::Authorization, found);
+    request->header(StaticStrings::Authorization, found);
   
   if (!found) {
     events::CredentialsMissing(request);
@@ -847,13 +853,17 @@ ResponseCode HttpCommTask::handleAuthHeader(HttpRequest* request) const {
       }
       
       if (authMethod != AuthenticationMethod::NONE) {
-        AuthResult result = _authentication->authInfo()->
-        checkAuthentication(authMethod, auth);
-        
-        request->setAuthorized(result._authorized);
-        if (result._authorized) {
+        request->setAuthenticationMethod(authMethod);
+        if (_authentication->isActive()) {
+          AuthResult result = _authentication->authInfo()->
+            checkAuthentication(authMethod, auth);
+          request->setAuthorized(result._authorized);
           request->setUser(std::move(result._username));
-          
+        } else {
+          request->setAuthorized(true);
+        }
+        
+        if (request->authorized()) {
           events::Authenticated(request, authMethod);
           return rest::ResponseCode::OK;
         }
@@ -861,7 +871,7 @@ ResponseCode HttpCommTask::handleAuthHeader(HttpRequest* request) const {
         return rest::ResponseCode::UNAUTHORIZED;
       }
       
-      // intentional fallthrough
+      // intentionally falls through
     } catch (arangodb::basics::Exception const& ex) {
       // translate error
       if (ex.code() == TRI_ERROR_USER_NOT_FOUND) {

@@ -33,15 +33,15 @@ if (LINUX OR DARWIN)
   if (DARWIN)
     set(JEMALLOC_CC_TMP "cc")
     set(JEMALLOC_CXX_TMP "c++}")
-    set(JEALLOC_CONFIG "background_thread:false")
+    set(JEMALLOC_CONFIG "background_thread:false")
   else ()
     set(JEMALLOC_CC_TMP "${CMAKE_C_COMPILER}")
     set(JEMALLOC_CXX_TMP "${CMAKE_CXX_COMPILER}")
-    set(JEALLOC_CONFIG "background_thread:true")
+    set(JEMALLOC_CONFIG "background_thread:true")
   endif ()
 
-  set(JEMALLOC_CFLAGS_TMP "-DARANGODB_MMAP_JEMALLOC=1")
-  set(JEMALLOC_CXXFLAGS_TMP "-DARANGODB_MMAP_JEMALLOC=1")
+  set(JEMALLOC_CFLAGS_TMP "-DARANGODB_MMAP_JEMALLOC=1 ${CMAKE_C_FLAGS}")
+  set(JEMALLOC_CXXFLAGS_TMP "-DARANGODB_MMAP_JEMALLOC=1 ${CMAKE_CXX_FLAGS}")
 
   ExternalProject_Add(
     jemalloc

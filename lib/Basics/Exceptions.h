@@ -58,6 +58,14 @@
 #define THROW_ARANGO_EXCEPTION_MESSAGE(code, message) \
   throw arangodb::basics::Exception(code, message, __FILE__, __LINE__)
 
+/// @brief throws an arango result if the result fails
+#define THROW_ARANGO_EXCEPTION_IF_FAIL(reSUlt) \
+  do { \
+    if ((reSUlt).fail()) { \
+      throw arangodb::basics::Exception((reSUlt), __FILE__, __LINE__); \
+    } \
+  } while(0);
+
 namespace arangodb {
 namespace basics {
 
@@ -97,6 +105,12 @@ class Exception : public virtual std::exception {
   int const _line;
   int const _code;
 };
+
+Result catchToResult(std::function<Result()> fn,
+                     int defaultError = TRI_ERROR_INTERNAL);
+Result catchVoidToResult(std::function<void()> fn,
+                         int defaultError = TRI_ERROR_INTERNAL);
+
 }
 }
 

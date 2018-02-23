@@ -89,9 +89,12 @@ void Logger::setLogLevel(std::string const& levelName) {
     return;
   }
 
+  // if log level is "foo = bar", we better get rid of the whitespace
+  StringUtils::trimInPlace(v[0]);
   bool isGeneral = v.size() == 1;
 
   if (!isGeneral) {
+    StringUtils::trimInPlace(v[1]);
     l = v[1];
   }
 
@@ -340,7 +343,7 @@ void Logger::log(char const* function, char const* file, long int line,
   out << Logger::translateLogLevel(level) << ' ';
 
   // check if we must display the line number
-  if (_showLineNumber) {
+  if (_showLineNumber && file != nullptr && function != nullptr) {
     char const* filename = file;
 
     if (_shortenFilenames) {
@@ -350,7 +353,7 @@ void Logger::log(char const* function, char const* file, long int line,
         filename = shortened + 1;
       }
     }
-    out << '[' << filename << ':' << line << "] ";
+    out << '[' << function << "@" << filename << ':' << line << "] ";
   }
 
   // generate the complete message
@@ -421,7 +424,7 @@ void Logger::shutdown() {
     int tries = 0;
     while (_loggingThread->hasMessages() && ++tries < 1000) {
       _loggingThread->wakeup();
-      usleep(10000);
+      std::this_thread::sleep_for(std::chrono::microseconds(10000));
     }
     _loggingThread->beginShutdown();
     _loggingThread.reset();

@@ -32,6 +32,11 @@
 #include "Basics/StringUtils.h"
 #include "Basics/VelocyPackHelper.h"
 #include "Cluster/ServerState.h"
+
+#ifdef USE_IRESEARCH
+  #include "IResearch/IResearchFeature.h"
+#endif
+
 #include "VocBase/LogicalCollection.h"
 #include "VocBase/ticks.h"
 
@@ -68,24 +73,6 @@ Index::Index(TRI_idx_iid_t iid, arangodb::LogicalCollection* collection,
       _sparse(arangodb::basics::VelocyPackHelper::getBooleanValue(
           slice, "sparse", false)),
       _clusterSelectivity(0.1) {
-  VPackSlice const fields = slice.get("fields");
-  setFields(fields,
-            Index::allowExpansion(Index::type(slice.get("type").copyString())));
-}
-
-/// TODO: can we remove this?
-/// @brief create an index stub with a hard-coded selectivity estimate
-/// this is used in the cluster coordinator case
-Index::Index(VPackSlice const& slice)
-    : _iid(arangodb::basics::StringUtils::uint64(
-          arangodb::basics::VelocyPackHelper::checkAndGetStringValue(slice,
-                                                                     "id"))),
-      _collection(nullptr),
-      _fields(),
-      _unique(arangodb::basics::VelocyPackHelper::getBooleanValue(
-          slice, "unique", false)),
-      _sparse(arangodb::basics::VelocyPackHelper::getBooleanValue(
-          slice, "sparse", false)) {
   VPackSlice const fields = slice.get("fields");
   setFields(fields,
             Index::allowExpansion(Index::type(slice.get("type").copyString())));
@@ -185,6 +172,11 @@ Index::IndexType Index::type(char const* type) {
   if (::strcmp(type, "geo2") == 0) {
     return TRI_IDX_TYPE_GEO2_INDEX;
   }
+#ifdef USE_IRESEARCH
+  if (arangodb::iresearch::IResearchFeature::type() == type) {
+    return TRI_IDX_TYPE_IRESEARCH_LINK;
+  }
+#endif
   if (::strcmp(type, "noaccess") == 0) {
     return TRI_IDX_TYPE_NO_ACCESS_INDEX;
   }
@@ -215,6 +207,10 @@ char const* Index::oldtypeName(Index::IndexType type) {
       return "geo1";
     case TRI_IDX_TYPE_GEO2_INDEX:
       return "geo2";
+#ifdef USE_IRESEARCH
+    case TRI_IDX_TYPE_IRESEARCH_LINK:
+      return arangodb::iresearch::IResearchFeature::type().c_str();
+#endif
     case TRI_IDX_TYPE_NO_ACCESS_INDEX:
       return "noaccess";
     case TRI_IDX_TYPE_UNKNOWN: {
@@ -516,14 +512,12 @@ double Index::selectivityEstimate(StringRef const* extra) const {
   }
 
   double estimate = 0.1; //default
-  if(!ServerState::instance()->isCoordinator()){
+  if (!ServerState::instance()->isCoordinator()) {
     estimate = selectivityEstimateLocal(extra);
   } else {
     // getClusterEstimate can not be called from within the index
     // as _collection is not always vaild
-
-    //estimate = getClusterEstimate(estimate /*as default*/).second;
-    estimate=_clusterSelectivity;
+    estimate = _clusterSelectivity;
   }
 
   TRI_ASSERT(estimate >= 0.0 &&
@@ -547,7 +541,7 @@ void Index::batchInsert(
     std::vector<std::pair<LocalDocumentId, arangodb::velocypack::Slice>> const& documents,
     std::shared_ptr<arangodb::basics::LocalTaskQueue> queue) {
   for (auto const& it : documents) {
-    Result status = insert(trx, it.first, it.second, false);
+    Result status = insert(trx, it.first, it.second, OperationMode::normal);
     if (status.errorNumber() != TRI_ERROR_NO_ERROR) {
       queue->setStatus(status.errorNumber());
       break;
@@ -558,6 +552,11 @@ void Index::batchInsert(
 /// @brief default implementation for drop
 int Index::drop() {
   // do nothing
+  return TRI_ERROR_NO_ERROR;
+}
+
+// called after the collection was truncated
+int Index::afterTruncate() {
   return TRI_ERROR_NO_ERROR;
 }
 
@@ -897,3 +896,7 @@ std::ostream& operator<<(std::ostream& stream, arangodb::Index const& index) {
   stream << index.context();
   return stream;
 }
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                       END-OF-FILE
+// -----------------------------------------------------------------------------

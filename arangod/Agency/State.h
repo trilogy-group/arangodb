@@ -101,7 +101,7 @@ class State {
   bool has(index_t, term_t) const;
   
   /// @brief Get log entries by client Id
-  std::vector<std::vector<log_t>> inquire(query_t const&) const;
+  std::vector<index_t> inquire(query_t const&) const;
 
   /// @brief Get complete logged commands by lower and upper bounds.
   ///        Default: [first, last]
@@ -167,6 +167,14 @@ class State {
     return _nextCompactionAfter;
   }
   
+  /// @brief this method is intended for manual recovery only. It only looks
+  /// at the persisted data structure and tries to recover the latest state.
+  /// The returned builder has the complete state of the agency and index
+  /// is set to the index of the last log entry.
+  static std::shared_ptr<VPackBuilder> latestAgencyState(TRI_vocbase_t* vocbase,
+                                                         index_t& index,
+                                                         term_t& term);
+
  private:
 
   /// @brief Persist a compaction snapshot

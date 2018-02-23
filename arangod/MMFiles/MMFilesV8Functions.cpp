@@ -33,6 +33,7 @@
 #include "StorageEngine/PhysicalCollection.h"
 #include "StorageEngine/StorageEngine.h"
 #include "Transaction/V8Context.h"
+#include "Utils/OperationOptions.h"
 #include "Utils/SingleCollectionTransaction.h"
 #include "V8/v8-conv.h"
 #include "V8/v8-globals.h"
@@ -51,11 +52,6 @@ static void JS_RotateVocbaseCol(
   TRI_V8_TRY_CATCH_BEGIN(isolate);
   v8::HandleScope scope(isolate);
 
-  if (ServerState::instance()->isCoordinator()) {
-    // renaming a collection in a cluster is unsupported
-    TRI_V8_THROW_EXCEPTION(TRI_ERROR_CLUSTER_UNSUPPORTED);
-  }
-
   PREVENT_EMBEDDED_TRANSACTION();
 
   arangodb::LogicalCollection* collection =
@@ -64,20 +60,19 @@ static void JS_RotateVocbaseCol(
   if (collection == nullptr) {
     TRI_V8_THROW_EXCEPTION_INTERNAL("cannot extract collection");
   }
-  
-  TRI_THROW_SHARDING_COLLECTION_NOT_YET_IMPLEMENTED(collection);
 
   SingleCollectionTransaction trx(
       transaction::V8Context::Create(collection->vocbase(), true),
-      collection->cid(), AccessMode::Type::READ);
+      collection->cid(), AccessMode::Type::WRITE);
 
   Result res = trx.begin();
-  
+
   if (!res.ok()) {
     TRI_V8_THROW_EXCEPTION(res);
   }
 
-  res = static_cast<MMFilesCollection*>(collection->getPhysical())->rotateActiveJournal();
+  OperationResult result = trx.rotateActiveJournal(collection->name(), OperationOptions());
+  res.reset(result.result);
 
   trx.finish(res);
 
@@ -172,9 +167,6 @@ static void JS_DatafileScanVocbaseCol(
 
   v8::Handle<v8::Object> result;
   {
-    // TODO Check with JAN Okay to just remove the lock?
-    // READ_LOCKER(readLocker, collection->_lock);
-
     TRI_vocbase_col_status_e status = collection->getStatusLocked();
     if (status != TRI_VOC_COL_STATUS_UNLOADED &&
         status != TRI_VOC_COL_STATUS_CORRUPTED) {
@@ -393,6 +385,7 @@ static void JS_FlushWal(v8::FunctionCallbackInfo<v8::Value> const& args) {
   bool waitForSync = false;
   bool waitForCollector = false;
   bool writeShutdownFile = false;
+  double maxWaitTime = -1.0;
 
   if (args.Length() > 0) {
     if (args[0]->IsObject()) {
@@ -409,6 +402,10 @@ static void JS_FlushWal(v8::FunctionCallbackInfo<v8::Value> const& args) {
         writeShutdownFile = TRI_ObjectToBoolean(
             obj->Get(TRI_V8_ASCII_STRING(isolate, "writeShutdownFile")));
       }
+      if (obj->Has(TRI_V8_ASCII_STRING(isolate, "maxWaitTime"))) {
+        maxWaitTime = TRI_ObjectToDouble(
+            obj->Get(TRI_V8_ASCII_STRING(isolate, "maxWaitTime")));
+      }
     } else {
       waitForSync = TRI_ObjectToBoolean(args[0]);
 
@@ -417,6 +414,10 @@ static void JS_FlushWal(v8::FunctionCallbackInfo<v8::Value> const& args) {
 
         if (args.Length() > 2) {
           writeShutdownFile = TRI_ObjectToBoolean(args[2]);
+
+          if (args.Length() > 3) {
+            maxWaitTime = TRI_ObjectToDouble(args[3]);
+          }
         }
       }
     }
@@ -425,7 +426,7 @@ static void JS_FlushWal(v8::FunctionCallbackInfo<v8::Value> const& args) {
   int res;
 
   if (ServerState::instance()->isCoordinator()) {
-    res = flushWalOnAllDBServers(waitForSync, waitForCollector);
+    res = flushWalOnAllDBServers(waitForSync, waitForCollector, maxWaitTime);
 
     if (res != TRI_ERROR_NO_ERROR) {
       TRI_V8_THROW_EXCEPTION(res);
@@ -434,7 +435,7 @@ static void JS_FlushWal(v8::FunctionCallbackInfo<v8::Value> const& args) {
   }
 
   res = MMFilesLogfileManager::instance()->flush(
-      waitForSync, waitForCollector, writeShutdownFile);
+      waitForSync, waitForCollector, writeShutdownFile, maxWaitTime);
 
   if (res != TRI_ERROR_NO_ERROR) {
     if (res == TRI_ERROR_LOCK_TIMEOUT) {
@@ -536,6 +537,16 @@ static void JS_TransactionsWal(
   TRI_V8_TRY_CATCH_END
 }
 
+static void JS_WaitForEstimatorSync(v8::FunctionCallbackInfo<v8::Value> const& args) {
+  TRI_V8_TRY_CATCH_BEGIN(isolate);
+  v8::HandleScope scope(isolate);
+
+  EngineSelectorFeature::ENGINE->waitForEstimatorSync(std::chrono::seconds(10));
+
+  TRI_V8_RETURN_TRUE();
+  TRI_V8_TRY_CATCH_END
+}
+
 void MMFilesV8Functions::registerResources() {
   ISOLATE;
   v8::HandleScope scope(isolate);
@@ -545,7 +556,7 @@ void MMFilesV8Functions::registerResources() {
   // patch ArangoCollection object
   v8::Handle<v8::ObjectTemplate> rt = v8::Handle<v8::ObjectTemplate>::New(isolate, v8g->VocbaseColTempl);
   TRI_ASSERT(!rt.IsEmpty());
-  
+
   TRI_AddMethodVocbase(isolate, rt, TRI_V8_ASCII_STRING(isolate, "datafiles"),
                        JS_DatafilesVocbaseCol, true);
   TRI_AddMethodVocbase(isolate, rt, TRI_V8_ASCII_STRING(isolate, "datafileScan"),
@@ -556,17 +567,21 @@ void MMFilesV8Functions::registerResources() {
                        JS_TruncateDatafileVocbaseCol, true);
   TRI_AddMethodVocbase(isolate, rt, TRI_V8_ASCII_STRING(isolate, "tryRepairDatafile"),
                        JS_TryRepairDatafileVocbaseCol, true);
-  
+
   // add global WAL handling functions
   TRI_AddGlobalFunctionVocbase(
       isolate, TRI_V8_ASCII_STRING(isolate, "WAL_FLUSH"), JS_FlushWal, true);
-  TRI_AddGlobalFunctionVocbase(isolate, 
+  TRI_AddGlobalFunctionVocbase(isolate,
                                TRI_V8_ASCII_STRING(isolate, "WAL_WAITCOLLECTOR"),
                                JS_WaitCollectorWal, true);
-  TRI_AddGlobalFunctionVocbase(isolate, 
+  TRI_AddGlobalFunctionVocbase(isolate,
                                TRI_V8_ASCII_STRING(isolate, "WAL_PROPERTIES"),
                                JS_PropertiesWal, true);
-  TRI_AddGlobalFunctionVocbase(isolate, 
+  TRI_AddGlobalFunctionVocbase(isolate,
                                TRI_V8_ASCII_STRING(isolate, "WAL_TRANSACTIONS"),
                                JS_TransactionsWal, true);
+  TRI_AddGlobalFunctionVocbase(isolate,
+                               TRI_V8_ASCII_STRING(isolate,
+                                                   "WAIT_FOR_ESTIMATOR_SYNC"),
+                               JS_WaitForEstimatorSync, true);
 }

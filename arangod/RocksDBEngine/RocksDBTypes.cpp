@@ -27,6 +27,11 @@ using namespace arangodb;
 
 namespace {
 
+static RocksDBEntryType placeholder = arangodb::RocksDBEntryType::Placeholder;
+static rocksdb::Slice Placeholder(
+    reinterpret_cast<std::underlying_type<RocksDBEntryType>::type*>(&placeholder),
+    1);
+
 static RocksDBEntryType database = arangodb::RocksDBEntryType::Database;
 static rocksdb::Slice Database(
     reinterpret_cast<std::underlying_type<RocksDBEntryType>::type*>(&database),
@@ -119,6 +124,8 @@ static rocksdb::Slice KeyGeneratorValue(
 
 char const* arangodb::rocksDBEntryTypeName(arangodb::RocksDBEntryType type) {
   switch (type) {
+    case arangodb::RocksDBEntryType::Placeholder:
+      return "Placeholder";
     case arangodb::RocksDBEntryType::Database:
       return "Database";
     case arangodb::RocksDBEntryType::Collection:
@@ -177,12 +184,20 @@ char const* arangodb::rocksDBLogTypeName(arangodb::RocksDBLogType type) {
       return "ViewDrop";
     case arangodb::RocksDBLogType::ViewChange:
       return "ViewChange";
+    case arangodb::RocksDBLogType::ViewRename:
+      return "ViewRename";
+#ifdef USE_IRESEARCH
+    case arangodb::RocksDBLogType::IResearchLinkDrop:
+      return "IResearchLinkDrop";
+#endif
     case arangodb::RocksDBLogType::BeginTransaction:
       return "BeginTransaction";
     case arangodb::RocksDBLogType::DocumentOperationsPrologue:
       return "DocumentOperationsPrologue";
     case arangodb::RocksDBLogType::DocumentRemove:
       return "DocumentRemove";
+    case arangodb::RocksDBLogType::DocumentRemoveAsPartOfUpdate:
+      return "IgnoreRemoveAsPartOfUpdate";
     case arangodb::RocksDBLogType::SinglePut:
       return "SinglePut";
     case arangodb::RocksDBLogType::SingleRemove:
@@ -195,6 +210,8 @@ char const* arangodb::rocksDBLogTypeName(arangodb::RocksDBLogType type) {
 
 rocksdb::Slice const& arangodb::rocksDBSlice(RocksDBEntryType const& type) {
   switch (type) {
+    case RocksDBEntryType::Placeholder:
+      return Placeholder;
     case RocksDBEntryType::Database:
       return Database;
     case RocksDBEntryType::Collection:
@@ -227,7 +244,7 @@ rocksdb::Slice const& arangodb::rocksDBSlice(RocksDBEntryType const& type) {
       return KeyGeneratorValue;
   }
 
-  return Document;  // avoids warning - errorslice instead ?!
+  return Placeholder;  // avoids warning - errorslice instead ?!
 }
 
 

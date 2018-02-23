@@ -109,11 +109,26 @@ to all "follower" replicas, before the write operation is reported successful.
 If a server fails, this is detected automatically and one of the servers holding 
 copies take over, usually without an error being reported.
 
+@RESTBODYPARAM{distributeShardsLike,string,optional,string}
+(The default is *""*): in an enterprise cluster, this attribute binds
+the specifics of sharding  for the newly created collection to follow that of a
+specified existing collection. 
+**Note**: Using this parameter has consequences for the prototype
+collection. It can no longer be dropped, before sharding imitating
+collections are dropped. Equally, backups and restores of imitating
+collections alone will generate warnings, which can be overridden,
+about missing sharding prototype. 
+
 @RESTQUERYPARAMETERS 
 @RESTQUERYPARAM{waitForSyncReplication,integer,optional,int64}
 Default is *1* which means the server will only report success back to the client
 if all replicas have created the collection. Set to *0* if you want faster
 server responses and don't care about full replication.
+
+@RESTQUERYPARAM{enforceReplicationFactor,integer,optional,int64}
+Default is *1* which means the server will check if there are enough replicas
+available at creation time and bail out otherwise. Set to *0* to disable this
+extra check.
 
 @RESTDESCRIPTION
 Creates a new collection with a given name. The request must contain an

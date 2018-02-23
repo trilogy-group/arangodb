@@ -30,7 +30,6 @@
 #include "Aql/Functions.h"
 #include "Aql/Query.h"
 #include "Basics/Exceptions.h"
-#include "Basics/ScopeGuard.h"
 #include "Basics/StaticStrings.h"
 #include "Cluster/ServerState.h"
 #include "Utils/OperationCursor.h"
@@ -107,10 +106,10 @@ arangodb::aql::AstNode* IndexBlock::makeUnique(
     if (isSparse) {
       // the index is sorted. we need to use SORTED_UNIQUE to get the
       // result back in index order
-      return ast->createNodeFunctionCall("SORTED_UNIQUE", array);
+      return ast->createNodeFunctionCall(TRI_CHAR_LENGTH_PAIR("SORTED_UNIQUE"), array);
     }
     // a regular UNIQUE will do
-    return ast->createNodeFunctionCall("UNIQUE", array);
+    return ast->createNodeFunctionCall(TRI_CHAR_LENGTH_PAIR("UNIQUE"), array);
   }
 
   // presumably an array with no or a single member
@@ -138,15 +137,26 @@ void IndexBlock::executeExpressions() {
                               _inRegs[posInExpressions], mustDestroy);
     AqlValueGuard guard(a, mustDestroy);
 
-    AstNode* evaluatedNode = nullptr;
-
     AqlValueMaterializer materializer(_trx);
     VPackSlice slice = materializer.slice(a, false);
-    evaluatedNode = ast->nodeFromVPack(slice, true);
+    AstNode* evaluatedNode = ast->nodeFromVPack(slice, true);
 
-    _condition->getMember(toReplace->orMember)
-        ->getMember(toReplace->andMember)
-        ->changeMember(toReplace->operatorMember, evaluatedNode);
+    auto oldCondition = _condition;
+    auto newCondition = ast->shallowCopyForModify(oldCondition);
+    _condition = newCondition;
+    TRI_DEFER(FINALIZE_SUBTREE(_condition));
+
+    auto oldOrMember = _condition->getMember(toReplace->orMember);
+    auto orMember = ast->shallowCopyForModify(oldOrMember);
+    TRI_DEFER(FINALIZE_SUBTREE(orMember));
+    newCondition->changeMember(toReplace->orMember, orMember);
+
+    auto oldAndMember = orMember->getMember(toReplace->andMember);
+    auto andMember = ast->shallowCopyForModify(oldAndMember);
+    TRI_DEFER(FINALIZE_SUBTREE(andMember));
+    orMember->changeMember(toReplace->andMember, andMember);
+
+    andMember->changeMember(toReplace->operatorMember, evaluatedNode);
   }
   DEBUG_END_BLOCK();
 }
@@ -272,24 +282,21 @@ bool IndexBlock::initIndexes() {
     TRI_ASSERT(_condition != nullptr);
 
     if (_hasV8Expression) {
-      bool const isRunningInCluster =
-          arangodb::ServerState::instance()->isRunningInCluster();
-
       // must have a V8 context here to protect Expression::execute()
-      auto engine = _engine;
-      arangodb::basics::ScopeGuard guard{
-          [&engine]() -> void { engine->getQuery()->enterContext(); },
-          [&]() -> void {
-            if (isRunningInCluster) {
-              // must invalidate the expression now as we might be called from
-              // different threads
-              for (auto const& e : _nonConstExpressions) {
-                e->expression->invalidate();
-              }
+      auto cleanup = [this]() {
+        if (arangodb::ServerState::instance()->isRunningInCluster()) {
+          // must invalidate the expression now as we might be called from
+          // different threads
+          for (auto const& e : _nonConstExpressions) {
+            e->expression->invalidate();
+          }
 
-              engine->getQuery()->exitContext();
-            }
-          }};
+          _engine->getQuery()->exitContext();
+        }
+      };
+
+      _engine->getQuery()->enterContext();
+      TRI_DEFER(cleanup());
 
       ISOLATE;
       v8::HandleScope scope(isolate);  // do not delete this!
@@ -314,7 +321,7 @@ bool IndexBlock::initIndexes() {
   }
 
   createCursor();
-  if (_cursor->failed()) {
+  if (_cursor->fail()) {
     THROW_ARANGO_EXCEPTION(_cursor->code);
   }
 
@@ -327,7 +334,7 @@ bool IndexBlock::initIndexes() {
     if (_currentIndex < _indexes.size()) {
       // This check will work as long as _indexes.size() < MAX_SIZE_T
       createCursor();
-      if (_cursor->failed()) {
+      if (_cursor->fail()) {
         THROW_ARANGO_EXCEPTION(_cursor->code);
       }
     } else {
@@ -408,6 +415,9 @@ bool IndexBlock::skipIndex(size_t atMost) {
     }
   }
   return false;
+
+  // cppcheck-suppress style
+  DEBUG_END_BLOCK();
 }
 
 // this is called every time we need to fetch data from the indexes
@@ -427,7 +437,7 @@ bool IndexBlock::readIndex(
     // All indexes exhausted
     return false;
   }
-    
+
   while (_cursor != nullptr) {
     if (!_cursor->hasMore()) {
       startNextCursor();
@@ -446,10 +456,10 @@ bool IndexBlock::readIndex(
     }
 
     TRI_ASSERT(atMost >= _returned);
- 
+
 
     // TODO: optimize for the case when produceResult() is false
-    // in this case we do not need to fetch the documents at all 
+    // in this case we do not need to fetch the documents at all
     bool res = _cursor->nextDocument(callback, atMost - _returned);
 
     if (res) {
@@ -488,7 +498,7 @@ int IndexBlock::initializeCursor(AqlItemBlock* items, size_t pos) {
 /// @brief getSome
 AqlItemBlock* IndexBlock::getSome(size_t atLeast, size_t atMost) {
   DEBUG_BEGIN_BLOCK();
-  traceGetSomeBegin();
+  traceGetSomeBegin(atLeast, atMost);
   if (_done) {
     traceGetSomeEnd(nullptr);
     return nullptr;
@@ -525,7 +535,7 @@ AqlItemBlock* IndexBlock::getSome(size_t atLeast, size_t atMost) {
           return;
         }
       }
-      
+
       _documentProducer(res.get(), slice, curRegs, _returned, copyFromRow);
     };
   } else {
@@ -571,7 +581,7 @@ AqlItemBlock* IndexBlock::getSome(size_t atLeast, size_t atMost) {
     TRI_ASSERT(!_indexesExhausted);
     AqlItemBlock* cur = _buffer.front();
     curRegs = cur->getNrRegs();
-   
+
     TRI_ASSERT(curRegs <= res->getNrRegs());
 
     // only copy 1st row of registers inherited from previous frame(s)

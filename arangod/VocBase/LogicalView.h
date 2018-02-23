@@ -38,6 +38,11 @@ namespace velocypack {
 class Slice;
 }
 
+namespace aql {
+class ExecutionPlan;
+struct ExecutionContext;
+}
+
 class PhysicalView;
 
 class LogicalView {
@@ -46,6 +51,16 @@ class LogicalView {
  public:
   LogicalView(TRI_vocbase_t*, velocypack::Slice const&);
   ~LogicalView();
+
+  //////////////////////////////////////////////////////////////////////////////
+  /// @brief invoke visitor on all collections that a view will return
+  /// @return visitation was successful
+  //////////////////////////////////////////////////////////////////////////////
+  bool visitCollections(
+      std::function<bool(TRI_voc_cid_t)> const& visitor
+  ) const {
+    return _implementation && _implementation->visitCollections(visitor);
+  }
 
  protected:  // If you need a copy outside the class, use clone below.
   explicit LogicalView(LogicalView const&);
@@ -72,6 +87,8 @@ class LogicalView {
   bool deleted() const;
   void setDeleted(bool);
 
+  void rename(std::string const& newName, bool doSync);
+
   PhysicalView* getPhysical() const { return _physical.get(); }
   ViewImplementation* getImplementation() const {
     return _implementation.get();
@@ -80,8 +97,8 @@ class LogicalView {
   void drop();
 
   // SECTION: Serialization
-  VPackBuilder toVelocyPack(bool includeProperties = false,
-                            bool includeSystem = false) const;
+  velocypack::Builder toVelocyPack(bool includeProperties = false,
+                                   bool includeSystem = false) const;
 
   void toVelocyPack(velocypack::Builder&, bool includeProperties = false,
                     bool includeSystem = false) const;

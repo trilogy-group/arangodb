@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 /// DISCLAIMER
 ///
-/// Copyright 2014-2016 ArangoDB GmbH, Cologne, Germany
+/// Copyright 2014-2017 ArangoDB GmbH, Cologne, Germany
 /// Copyright 2004-2014 triAGENS GmbH, Cologne, Germany
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +38,12 @@
 
 #include <velocypack/Slice.h>
 
+#ifdef USE_ENTERPRISE
+  #define ENTERPRISE_VIRT virtual
+#else
+  #define ENTERPRISE_VIRT
+#endif
+
 namespace arangodb {
 
 namespace basics {
@@ -65,8 +71,8 @@ class BaseEngine;
 }
 
 namespace transaction {
-class CallbackInvoker;
 class Context;
+struct Options;
 }
 
 /// @brief forward declarations
@@ -80,17 +86,9 @@ class TransactionState;
 class TransactionCollection;
 
 namespace transaction {
-struct Options;
-  
-#ifdef USE_ENTERPRISE
-  #define ENTERPRISE_VIRT virtual
-#else
-  #define ENTERPRISE_VIRT
-#endif
 
 class Methods {
   friend class traverser::BaseEngine;
-  friend class CallbackInvoker;
 
  public:
   class IndexHandle {
@@ -137,6 +135,13 @@ class Methods {
 
  public:
 
+  typedef Result(*StateRegistrationCallback)(TRI_voc_cid_t cid, TransactionState& state);
+
+  /// @brief add a callback to be called for state instance association events
+  ///        e.g. addCollection(...)
+  /// @note not thread-safe on the assumption of static factory registration
+  static void addStateRegistrationCallback(StateRegistrationCallback callback);
+
   /// @brief default batch size for index and other operations
   static constexpr uint64_t defaultBatchSize() { return 1000; }
 
@@ -145,9 +150,6 @@ class Methods {
     ALL = 0,
     ANY
   };
-
-  /// @brief register a callback for transaction commit or abort
-  void registerCallback(std::function<void(arangodb::transaction::Methods* trx)> const& onFinish) { _onFinish = onFinish; }
 
   /// @brief return database of transaction
   TRI_vocbase_t* vocbase() const;
@@ -209,9 +211,7 @@ class Methods {
   /// @brief read many documents, using skip and limit in arbitrary order
   /// The result guarantees that all documents are contained exactly once
   /// as long as the collection is not modified.
-  ENTERPRISE_VIRT OperationResult any(std::string const&,
-                                      uint64_t skip = 0,
-                                      uint64_t limit = 1);
+  ENTERPRISE_VIRT OperationResult any(std::string const& collectionName);
 
   /// @brief add a collection to the transaction for read, at runtime
   ENTERPRISE_VIRT TRI_voc_cid_t addCollectionAtRuntime(TRI_voc_cid_t cid,
@@ -300,6 +300,10 @@ class Methods {
   OperationResult truncate(std::string const& collectionName,
                            OperationOptions const& options);
 
+  /// @brief rotate all active journals of the collection
+  OperationResult rotateActiveJournal(std::string const& collectionName,
+                                      OperationOptions const& options);
+
   /// @brief count the number of documents in a collection
   ENTERPRISE_VIRT OperationResult count(std::string const& collectionName, bool aggregate);
 
@@ -359,7 +363,6 @@ class Methods {
   ENTERPRISE_VIRT
   std::unique_ptr<OperationCursor> indexScan(std::string const& collectionName,
                                              CursorType cursorType,
-                                             ManagedDocumentResult*,
                                              bool reverse);
 
   /// @brief test if a collection is already locked
@@ -385,7 +388,7 @@ class Methods {
 
   /// @brief return the collection name resolver
   CollectionNameResolver const* resolver() const;
-  
+
 #ifdef USE_ENTERPRISE
   virtual bool isInaccessibleCollectionId(TRI_voc_cid_t cid) { return false; }
   virtual bool isInaccessibleCollection(std::string const& cid) { return false; }
@@ -448,17 +451,23 @@ class Methods {
                            uint64_t skip, uint64_t limit,
                            OperationOptions& options);
 
-  OperationResult anyCoordinator(std::string const& collectionName,
-                                 uint64_t skip, uint64_t limit);
+  OperationResult anyCoordinator(std::string const& collectionName);
 
-  OperationResult anyLocal(std::string const& collectionName, uint64_t skip,
-                           uint64_t limit);
+  OperationResult anyLocal(std::string const& collectionName);
 
   OperationResult truncateCoordinator(std::string const& collectionName,
                                       OperationOptions& options);
 
   OperationResult truncateLocal(std::string const& collectionName,
                                 OperationOptions& options);
+
+  OperationResult rotateActiveJournalCoordinator(std::string const& collectionName,
+                                                 OperationOptions const& options);
+
+  OperationResult rotateActiveJournalLocal(std::string const& collectionName,
+                                           OperationOptions const& options);
+
+
 
   OperationResult countCoordinator(std::string const& collectionName, bool aggregate);
   OperationResult countLocal(std::string const& collectionName);
@@ -485,10 +494,10 @@ class Methods {
   Result addCollection(std::string const&, AccessMode::Type);
 
   /// @brief read- or write-lock a collection
-  ENTERPRISE_VIRT Result lock(TRI_voc_cid_t, AccessMode::Type);
+  ENTERPRISE_VIRT Result lockRecursive(TRI_voc_cid_t, AccessMode::Type);
 
   /// @brief read- or write-unlock a collection
-  ENTERPRISE_VIRT Result unlock(TRI_voc_cid_t, AccessMode::Type);
+  ENTERPRISE_VIRT Result unlockRecursive(TRI_voc_cid_t, AccessMode::Type);
 
  private:
 
@@ -526,7 +535,7 @@ class Methods {
 
   /// @brief findIndexHandleForAndNode
   std::pair<bool, bool> findIndexHandleForAndNode(
-      std::vector<std::shared_ptr<Index>> indexes, arangodb::aql::AstNode* node,
+      std::vector<std::shared_ptr<Index>> const& indexes, arangodb::aql::AstNode* node,
       arangodb::aql::Variable const* reference,
       arangodb::aql::SortCondition const* sortCondition,
       size_t itemsInCollection,
@@ -535,7 +544,7 @@ class Methods {
       bool& isSparse) const;
 
   /// @brief findIndexHandleForAndNode, Shorthand which does not support Sort
-  bool findIndexHandleForAndNode(std::vector<std::shared_ptr<Index>> indexes,
+  bool findIndexHandleForAndNode(std::vector<std::shared_ptr<Index>> const& indexes,
                                  arangodb::aql::AstNode*& node,
                                  arangodb::aql::Variable const* reference,
                                  size_t itemsInCollection,
@@ -581,23 +590,6 @@ class Methods {
     std::string name;
   }
   _collectionCache;
-
-  /// @brief optional callback function that will be called on transaction
-  /// commit or abort
-  std::function<void(arangodb::transaction::Methods* trx)> _onFinish;
-};
-
-class CallbackInvoker {
- public:
-  explicit CallbackInvoker(transaction::Methods* trx) : _trx(trx) {}
-  ~CallbackInvoker() {
-    invoke();
-  }
-
-  void invoke() noexcept;
-
- private:
-  transaction::Methods* _trx;
 };
 
 }

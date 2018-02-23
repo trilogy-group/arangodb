@@ -27,6 +27,7 @@
 #include "Basics/AttributeNameParser.h"
 #include "Basics/Common.h"
 #include "Indexes/Index.h"
+#include "RocksDBEngine/RocksDBCuckooIndexEstimator.h"
 #include "RocksDBEngine/RocksDBKeyBounds.h"
 #include "RocksDBEngine/RocksDBTransactionState.h"
 
@@ -41,7 +42,7 @@ namespace cache {
 class Cache;
 }
 class LogicalCollection;
-class RocksDBCounterManager;
+class RocksDBSettingsManager;
 class RocksDBMethods;
 
 class RocksDBIndex : public Index {
@@ -66,7 +67,7 @@ class RocksDBIndex : public Index {
  public:
   ~RocksDBIndex();
   void toVelocyPackFigures(VPackBuilder& builder) const override;
-  
+
   /// @brief return a VelocyPack representation of the index
   void toVelocyPack(velocypack::Builder& builder, bool withFigures,
                     bool forPersistence) const override;
@@ -76,11 +77,10 @@ class RocksDBIndex : public Index {
   bool isPersistent() const override final { return true; }
 
   int drop() override;
+  int afterTruncate() override;
 
   void load() override;
   void unload() override;
-
-  virtual void truncate(transaction::Methods*);
 
   size_t memory() const override;
 
@@ -93,15 +93,16 @@ class RocksDBIndex : public Index {
   }
 
   Result insert(transaction::Methods* trx, LocalDocumentId const& documentId,
-                velocypack::Slice const& doc, bool) override {
+                velocypack::Slice const& doc, OperationMode mode) override {
     auto mthds = RocksDBTransactionState::toMethods(trx);
-    return insertInternal(trx, mthds, documentId, doc);
+    return insertInternal(trx, mthds, documentId, doc, mode);
   }
 
   Result remove(transaction::Methods* trx, LocalDocumentId const& documentId,
-                arangodb::velocypack::Slice const& doc, bool) override {
+                arangodb::velocypack::Slice const& doc,
+                OperationMode mode) override {
     auto mthds = RocksDBTransactionState::toMethods(trx);
-    return removeInternal(trx, mthds, documentId, doc);
+    return removeInternal(trx, mthds, documentId, doc, mode);
   }
 
   void setCacheEnabled(bool enable) {
@@ -111,32 +112,36 @@ class RocksDBIndex : public Index {
   void createCache();
   void destroyCache();
 
-  virtual void serializeEstimate(std::string& output) const;
+  virtual rocksdb::SequenceNumber serializeEstimate(
+      std::string& output, rocksdb::SequenceNumber seq) const;
 
-  virtual bool deserializeEstimate(RocksDBCounterManager* mgr);
+  virtual bool deserializeEstimate(RocksDBSettingsManager* mgr);
 
   virtual void recalculateEstimates();
 
   /// insert index elements into the specified write batch.
   virtual Result insertInternal(transaction::Methods* trx, RocksDBMethods*,
                                 LocalDocumentId const& documentId,
-                                arangodb::velocypack::Slice const&) = 0;
-  
+                                arangodb::velocypack::Slice const&,
+                                OperationMode mode) = 0;
+
   virtual Result updateInternal(transaction::Methods* trx, RocksDBMethods*,
                                 LocalDocumentId const& oldDocumentId,
                                 arangodb::velocypack::Slice const& oldDoc,
                                 LocalDocumentId const& newDocumentId,
-                                velocypack::Slice const& newDoc);
+                                velocypack::Slice const& newDoc,
+                                OperationMode mode);
 
   /// remove index elements and put it in the specified write batch.
   virtual Result removeInternal(transaction::Methods* trx, RocksDBMethods*,
                                 LocalDocumentId const& documentId,
-                                arangodb::velocypack::Slice const&) = 0;
+                                arangodb::velocypack::Slice const&,
+                                OperationMode mode) = 0;
 
   rocksdb::ColumnFamilyHandle* columnFamily() const { return _cf; }
 
   rocksdb::Comparator const* comparator() const;
-  
+
   RocksDBKeyBounds getBounds() const {
     return RocksDBIndex::getBounds(type(), _objectId, _unique);
   };
@@ -144,13 +149,10 @@ class RocksDBIndex : public Index {
   static RocksDBKeyBounds getBounds(Index::IndexType type, uint64_t objectId,
                                     bool unique);
 
- protected:
-  // Will be called during truncate to allow the index to update selectivity
-  // estimates, blacklist keys, etc.
-  virtual Result postprocessRemove(transaction::Methods* trx,
-                                   rocksdb::Slice const& key,
-                                   rocksdb::Slice const& value);
+  virtual RocksDBCuckooIndexEstimator<uint64_t>* estimator();
+  virtual bool needToPersistEstimate() const;
 
+ protected:
   inline bool useCache() const { return (_cacheEnabled && _cachePresent); }
   void blackListKey(char const* data, std::size_t len);
   void blackListKey(StringRef& ref) { blackListKey(ref.data(), ref.size()); };

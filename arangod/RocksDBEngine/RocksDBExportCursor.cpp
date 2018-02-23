@@ -25,6 +25,7 @@
 #include "RocksDBEngine/RocksDBExportCursor.h"
 #include "Basics/WriteLocker.h"
 #include "Indexes/IndexIterator.h"
+#include "Logger/Logger.h"
 #include "RocksDBEngine/RocksDBCollection.h"
 #include "StorageEngine/EngineSelectorFeature.h"
 #include "StorageEngine/PhysicalCollection.h"
@@ -34,8 +35,6 @@
 #include "Utils/SingleCollectionTransaction.h"
 #include "VocBase/LogicalCollection.h"
 #include "VocBase/vocbase.h"
-
-#include "Logger/Logger.h"
 
 #include <velocypack/Builder.h>
 #include <velocypack/Dumper.h>
@@ -50,35 +49,28 @@ RocksDBExportCursor::RocksDBExportCursor(
     CollectionExport::Restrictions const& restrictions, CursorId id,
     size_t limit, size_t batchSize, double ttl, bool hasCount)
     : Cursor(id, batchSize, nullptr, ttl, hasCount),
-      _vocbaseGuard(vocbase),
+      _guard(vocbase),
       _resolver(vocbase),
       _restrictions(restrictions),
-      _name(name),
-      _mdr() {
-  // prevent the collection from being unloaded while the export is ongoing
-  // this may throw
-  _collectionGuard.reset(
-      new arangodb::CollectionGuard(vocbase, _name.c_str(), false));
-
-  _collection = _collectionGuard->collection();
-
+      _name(name) {
   _trx.reset(new SingleCollectionTransaction(
-      transaction::StandaloneContext::Create(_collection->vocbase()), _name,
+      transaction::StandaloneContext::Create(vocbase), _name,
       AccessMode::Type::READ));
 
-  // already locked by guard above
-  _trx->addHint(transaction::Hints::Hint::NO_USAGE_LOCK);
   Result res = _trx->begin();
 
   if (!res.ok()) {
     THROW_ARANGO_EXCEPTION(res);
   }
 
-  auto rocksCollection =
-      static_cast<RocksDBCollection*>(_collection->getPhysical());
-  _iter = rocksCollection->getAllIterator(_trx.get(), &_mdr, false);
+  LogicalCollection* collection = _trx->documentCollection();
+  TRI_ASSERT(collection != nullptr);
 
-  _size = _collection->numberDocuments(_trx.get());
+  auto rocksCollection =
+      static_cast<RocksDBCollection*>(collection->getPhysical());
+  _iter = rocksCollection->getAllIterator(_trx.get(), false);
+
+  _size = collection->numberDocuments(_trx.get());
   if (limit > 0 && limit < _size) {
     _size = limit;
   }
@@ -114,12 +106,9 @@ VPackSlice RocksDBExportCursor::next() {
 size_t RocksDBExportCursor::count() const { return _size; }
 
 void RocksDBExportCursor::dump(VPackBuilder& builder) {
-  auto transactionContext =
-      std::make_shared<transaction::StandaloneContext>(_vocbaseGuard.vocbase());
-
+  auto ctx = transaction::StandaloneContext::Create(_guard.database());
   VPackOptions const* oldOptions = builder.options;
-
-  builder.options = transactionContext->getVPackOptions();
+  builder.options = ctx->getVPackOptions();
 
   TRI_ASSERT(_iter.get() != nullptr);
 

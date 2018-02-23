@@ -114,7 +114,7 @@ void MMFilesCompactorThread::DropDatafileCallback(MMFilesDatafile* df, LogicalCo
   if (res != TRI_ERROR_NO_ERROR) {
     LOG_TOPIC(ERR, Logger::COMPACTOR) << "cannot close obsolete datafile '" << datafile->getName() << "': " << TRI_errno_string(res);
   } else if (datafile->isPhysical()) {
-    LOG_TOPIC(DEBUG, Logger::COMPACTOR) << "wiping compacted datafile from disk";
+    LOG_TOPIC(DEBUG, Logger::COMPACTOR) << "wiping compacted datafile '" << datafile->getName() << "' from disk";
 
     res = TRI_UnlinkFile(filename.c_str());
 
@@ -440,6 +440,9 @@ void MMFilesCompactorThread::compactDatafiles(LogicalCollection* collection,
   trx.addHint(transaction::Hints::Hint::NO_ABORT_MARKER);
   trx.addHint(transaction::Hints::Hint::NO_COMPACTION_LOCK);
   trx.addHint(transaction::Hints::Hint::NO_THROTTLING);
+  // when we get into this function, the caller has already acquired the
+  // collection's status lock - so we better do not lock it again
+  trx.addHint(transaction::Hints::Hint::NO_USAGE_LOCK);
 
   CompactionInitialContext initial = getCompactionContext(&trx, collection, toCompact);
 
@@ -449,7 +452,7 @@ void MMFilesCompactorThread::compactDatafiles(LogicalCollection* collection,
     return;
   }
 
-  LOG_TOPIC(DEBUG, Logger::COMPACTOR) << "compactify called for collection '" << collection->cid() << "' for " << n << " datafiles of total size " << initial._targetSize;
+  LOG_TOPIC(DEBUG, Logger::COMPACTOR) << "compaction writes to be executed for collection '" << collection->cid() << "', number of source datafiles: " << n << ", target datafile size: " << initial._targetSize;
 
   // now create a new compactor file
   // we are re-using the _fid of the first original datafile!
@@ -466,7 +469,7 @@ void MMFilesCompactorThread::compactDatafiles(LogicalCollection* collection,
 
   TRI_ASSERT(compactor != nullptr);
 
-  LOG_TOPIC(DEBUG, Logger::COMPACTOR) << "created new compactor file '" << compactor->getName() << "'";
+  LOG_TOPIC(DEBUG, Logger::COMPACTOR) << "created new compactor file '" << compactor->getName() << "', size: " << compactor->maximalSize();
 
   // these attributes remain the same for all datafiles we collect
   context->_collection = collection;
@@ -517,7 +520,10 @@ void MMFilesCompactorThread::compactDatafiles(LogicalCollection* collection,
   TRI_ASSERT(context->_dfi.sizeDead == 0);
 
   physical->_datafileStatistics.compactionRun(nrCombined, compactionBytesRead, context->_dfi.sizeAlive);
-  physical->_datafileStatistics.replace(compactor->fid(), context->_dfi);
+  try {
+    physical->_datafileStatistics.replace(compactor->fid(), context->_dfi, true);
+  } catch (...) {
+  }
 
   trx.commit();
 
@@ -967,7 +973,7 @@ void MMFilesCompactorThread::run() {
       if (numCompacted > 0) {
         // no need to sleep long or go into wait state if we worked.
         // maybe there's still work left
-        usleep(1000);
+        std::this_thread::sleep_for(std::chrono::microseconds(1000));
       } else if (state != TRI_vocbase_t::State::SHUTDOWN_COMPACTOR && _vocbase->state() == TRI_vocbase_t::State::NORMAL) {
         // only sleep while server is still running
         CONDITION_LOCKER(locker, _condition);
@@ -984,7 +990,7 @@ void MMFilesCompactorThread::run() {
     }
   }
 
-  LOG_TOPIC(DEBUG, Logger::COMPACTOR) << "shutting down compactor thread";
+  LOG_TOPIC(TRACE, Logger::COMPACTOR) << "shutting down compactor thread";
 }
 
 /// @brief determine the number of documents in the collection
@@ -996,6 +1002,9 @@ uint64_t MMFilesCompactorThread::getNumberOfDocuments(LogicalCollection* collect
   // if lock acquisition fails, we go on and report an (arbitrary) positive number
   trx.addHint(transaction::Hints::Hint::TRY_LOCK); 
   trx.addHint(transaction::Hints::Hint::NO_THROTTLING);
+  // when we get into this function, the caller has already acquired the
+  // collection's status lock - so we better do not lock it again
+  trx.addHint(transaction::Hints::Hint::NO_USAGE_LOCK);
 
   Result res = trx.begin();
 
