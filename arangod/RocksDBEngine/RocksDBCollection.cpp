@@ -72,13 +72,35 @@
 
 using namespace arangodb;
 
+// helper class that optionally disables indexing inside the
+// RocksDB transaction if possible, and that will turn indexing
+// back on later in its dtor 
+// this is just a performance optimization for small transactions
+struct IndexingDisabler {
+  IndexingDisabler(RocksDBMethods* mthd, bool disableIndexing) 
+      : mthd(mthd), disableIndexing(disableIndexing) {
+    if (disableIndexing) {
+      mthd->DisableIndexing();
+    }
+  }
+
+  ~IndexingDisabler() {
+    if (disableIndexing) {
+      mthd->EnableIndexing();
+    }
+  }
+
+  RocksDBMethods* mthd;
+  bool const disableIndexing;
+};
+
 RocksDBCollection::RocksDBCollection(LogicalCollection* collection,
                                      VPackSlice const& info)
     : PhysicalCollection(collection, info),
       _objectId(basics::VelocyPackHelper::stringUInt64(info, "objectId")),
       _numberDocuments(0),
       _revisionId(0),
-      _hasGeoIndex(false),
+      _numberOfGeoIndexes(0),
       _primaryIndex(nullptr),
       _cache(nullptr),
       _cachePresent(false),
@@ -106,7 +128,7 @@ RocksDBCollection::RocksDBCollection(LogicalCollection* collection,
       _objectId(static_cast<RocksDBCollection const*>(physical)->_objectId),
       _numberDocuments(0),
       _revisionId(0),
-      _hasGeoIndex(false),
+      _numberOfGeoIndexes(0),
       _primaryIndex(nullptr),
       _cache(nullptr),
       _cachePresent(false),
@@ -257,7 +279,7 @@ void RocksDBCollection::open(bool ignoreErrors) {
   for (std::shared_ptr<Index> it : _indexes) {
     if (it->type() == Index::TRI_IDX_TYPE_GEO1_INDEX ||
         it->type() == Index::TRI_IDX_TYPE_GEO2_INDEX) {
-      _hasGeoIndex = true;
+      ++_numberOfGeoIndexes;
     }
   }
 }
@@ -626,6 +648,9 @@ bool RocksDBCollection::dropIndex(TRI_idx_iid_t iid) {
         // trigger compaction before deleting the object
         cindex->cleanup();
 
+        bool isGeoIndex = (cindex->type() == Index::TRI_IDX_TYPE_GEO1_INDEX ||
+                           cindex->type() == Index::TRI_IDX_TYPE_GEO2_INDEX);
+
         _indexes.erase(_indexes.begin() + i);
         events::DropIndex("", std::to_string(iid), TRI_ERROR_NO_ERROR);
         // toVelocyPackIgnore will take a read lock and we don't need the
@@ -644,6 +669,13 @@ bool RocksDBCollection::dropIndex(TRI_idx_iid_t iid) {
             builder.slice(),
             RocksDBLogValue::IndexDrop(_logicalCollection->vocbase()->id(),
                                        _logicalCollection->cid(), iid));
+        
+        if (isGeoIndex) {
+          // decrease total number of geo indexes by one
+          TRI_ASSERT(_numberOfGeoIndexes > 0);
+          --_numberOfGeoIndexes;
+        }
+
         return res == TRI_ERROR_NO_ERROR;
       }
 
@@ -876,13 +908,20 @@ Result RocksDBCollection::insert(arangodb::transaction::Methods* trx,
   state->prepareOperation(_logicalCollection->cid(), revisionId,
                           TRI_VOC_DOCUMENT_OPERATION_INSERT);
 
+  // disable indexing in this transaction if we are allowed to
+  IndexingDisabler disabler(mthds, !hasGeoIndex() && trx->isSingleOperationTransaction());
+
   res = insertDocument(trx, documentId, newSlice, options);
 
   if (res.ok()) {
     trackWaitForSync(trx, options);
-    mdr.setManaged(newSlice.begin(), documentId);
+    if (options.silent) {
+      mdr.reset();
+    } else { 
+      mdr.setManaged(newSlice.begin(), documentId);
+      TRI_ASSERT(!mdr.empty());
+    }
 
-    // report document and key size
     Result result = state->addOperation(_logicalCollection->cid(), revisionId,
                                         TRI_VOC_DOCUMENT_OPERATION_INSERT);
 
@@ -977,10 +1016,13 @@ Result RocksDBCollection::update(arangodb::transaction::Methods* trx,
   if (res.ok()) {
     trackWaitForSync(trx, options);
 
-    mdr.setManaged(newDoc.begin(), documentId);
-    TRI_ASSERT(!mdr.empty());
+    if (options.silent) {
+      mdr.reset();
+    } else {
+      mdr.setManaged(newDoc.begin(), documentId);
+      TRI_ASSERT(!mdr.empty());
+    }
 
-    // report document and key size
     Result result = state->addOperation(_logicalCollection->cid(), revisionId,
                                         TRI_VOC_DOCUMENT_OPERATION_UPDATE);
 
@@ -1076,10 +1118,13 @@ Result RocksDBCollection::replace(transaction::Methods* trx,
   if (opResult.ok()) {
     trackWaitForSync(trx, options);
 
-    mdr.setManaged(newDoc.begin(), documentId);
-    TRI_ASSERT(!mdr.empty());
+    if (options.silent) {
+      mdr.reset();
+    } else {
+      mdr.setManaged(newDoc.begin(), documentId);
+      TRI_ASSERT(!mdr.empty());
+    }
 
-    // report document and key size
     Result result = state->addOperation(_logicalCollection->cid(), revisionId,
                                         TRI_VOC_DOCUMENT_OPERATION_REPLACE);
 
@@ -1224,7 +1269,7 @@ void RocksDBCollection::addIndex(std::shared_ptr<arangodb::Index> idx) {
   _indexes.emplace_back(idx);
   if (idx->type() == Index::TRI_IDX_TYPE_GEO1_INDEX ||
       idx->type() == Index::TRI_IDX_TYPE_GEO2_INDEX) {
-    _hasGeoIndex = true;
+    ++_numberOfGeoIndexes;
   }
   if (idx->type() == Index::TRI_IDX_TYPE_PRIMARY_INDEX) {
     TRI_ASSERT(idx->id() == 0);
@@ -1421,6 +1466,10 @@ Result RocksDBCollection::removeDocument(
   blackListKey(key->string().data(), static_cast<uint32_t>(key->string().size()));
 
   RocksDBMethods* mthd = RocksDBTransactionState::toMethods(trx);
+
+  // disable indexing in this transaction if we are allowed to
+  IndexingDisabler disabler(mthd, !hasGeoIndex() && trx->isSingleOperationTransaction());
+
   Result res = mthd->Delete(RocksDBColumnFamily::documents(), key.ref());
   if (!res.ok()) {
     return res;
@@ -1486,6 +1535,10 @@ Result RocksDBCollection::updateDocument(
                static_cast<uint32_t>(newKey->string().size()));
   rocksdb::Slice docSlice(reinterpret_cast<char const*>(newDoc.begin()),
                           static_cast<size_t>(newDoc.byteSize()));
+
+  // disable indexing in this transaction if we are allowed to
+  IndexingDisabler disabler(mthd, !hasGeoIndex() && trx->isSingleOperationTransaction());
+
   Result res = mthd->Put(RocksDBColumnFamily::documents(), newKey.ref(), docSlice);
   if (!res.ok()) {
     return res;
@@ -1576,7 +1629,6 @@ arangodb::Result RocksDBCollection::lookupDocumentVPack(
         << " seq: " << mthd->readOptions().snapshot->GetSequenceNumber()
         << " objectID " << _objectId << " name: " << _logicalCollection->name();
     mdr.reset();
-    TRI_ASSERT(false);
   }
   return res;
 }
@@ -1638,7 +1690,6 @@ arangodb::Result RocksDBCollection::lookupDocumentVPack(
         << "NOT FOUND rev: " << documentId.id() << " trx: " << trx->state()->id()
         << " seq: " << mthd->readOptions().snapshot->GetSequenceNumber()
         << " objectID " << _objectId << " name: " << _logicalCollection->name();
-    TRI_ASSERT(false);
   }
   return res;
 }
