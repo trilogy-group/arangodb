@@ -428,3 +428,7 @@ void IResearchRocksDBRecoveryHelper::LogData(const rocksdb::Slice& blob) {
 
 } // iresearch
 } // arangodb
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                       END-OF-FILE
+// -----------------------------------------------------------------------------

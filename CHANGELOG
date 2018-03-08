@@ -1,6 +1,10 @@
 devel
 -----
 
+* fix issue #4698: databases within the UI are now displayed in a sorted order.
+
+* fix issue #4657: fixed incomplete content type header
+
 * Behaviour of permissions for databases and collections changed:
   The new fallback rule for databases for which an access level is not explicitly specified:
   Choose the higher access level of::
@@ -143,6 +147,8 @@ devel
 * internal issue #1726: Supervision to remove deleted nodes from
   Health did not function for multiple servers at the same time, as
   agency transaction was malformed.
+
+* fixed a bug where supervision tried to deal with shards of virtual collections
 
 
 v3.3.4 (XXXX-XX-XX)
