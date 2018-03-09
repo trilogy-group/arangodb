@@ -3252,7 +3252,6 @@ Result MMFilesCollection::update(
     TRI_voc_tick_t& resultMarkerTick, bool lock, TRI_voc_rid_t& prevRev,
     ManagedDocumentResult& previous, VPackSlice const key) {
   LocalDocumentId const documentId = reuseOrCreateLocalDocumentId(options);
-  //LOG_TOPIC(ERR, Logger::FIXME) << "UPDATE. EFFECTIVE LOCALDOCUMENTID: " << documentId.id();
 
   bool const isEdgeCollection =
       (_logicalCollection->type() == TRI_COL_TYPE_EDGE);

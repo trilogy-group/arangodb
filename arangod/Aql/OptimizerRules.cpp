@@ -2611,6 +2611,9 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
     // extract database and collection from plan node
     TRI_vocbase_t* vocbase = nullptr;
     Collection const* collection = nullptr;
+    // single shard id - kept empty if the operation cannot safely be restricted to 
+    // a single shard
+    std::string shardId;
 
     SortElementVector elements;
 
@@ -2651,11 +2654,104 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
       if (nodeType == ExecutionNode::REMOVE ||
           nodeType == ExecutionNode::UPDATE) {
         // Note that in the REPLACE or UPSERT case we are not getting here,
-        // since
-        // the distributeInClusterRule fires and a DistributionNode is
+        // since the distributeInClusterRule fires and a DistributionNode is
         // used.
-        auto* modNode = static_cast<ModificationNode*>(node);
-        modNode->getOptions().ignoreDocumentNotFound = true;
+        
+        // additionally check if we can restrict the data modification operation
+        // to just a single shard
+        auto shardKeys = collection->shardKeys();
+      
+        std::vector<Variable const*> v = node->getVariablesUsedHere();
+        Variable const* inputVariable;
+        if (v.size() > 1) {
+          // If there is a key variable:
+          inputVariable = v[1];
+          // This is the _inKeyVariable! This works, since we use a ScatterNode
+          // for non-default-sharding attributes.
+        } else {
+          // was only UPDATE <doc> IN <collection> or a REMOVE (REMOVE only has
+          // a single input variable)
+          inputVariable = v[0];
+        }
+
+        // check if we can easily find out the setter of the input variable
+        // (and if we can find it, check if the data is constant so we can look
+        // up the shard key attribute values)
+        auto setter = plan->getVarSetBy(inputVariable->id);
+
+        if (setter != nullptr &&
+            setter->getType() == ExecutionNode::CALCULATION) {
+          // so far we can only handle calculation nodes here
+          CalculationNode const* c = static_cast<CalculationNode const*>(setter);
+          auto ex = c->expression();
+          TRI_ASSERT(ex != nullptr);
+
+          auto n = ex->node();
+          if (n != nullptr && n->isObject()) {
+            // the input for UPDATE/REMOVE is an object
+            // now inspect it
+            // TODO: handle string key input if shard key is _key
+
+            // note for which shard keys we need to look for
+            std::unordered_set<std::string> toFind;
+            for (auto const& it : shardKeys) {
+              toFind.emplace(it);
+            }
+            
+            VPackBuilder builder;
+            builder.openObject();
+            
+            // go through the input object attribute by attribute
+            // and look for our shard keys
+            for (size_t i = 0; i < n->numMembers(); ++i) {
+              auto sub = n->getMember(i);
+              if (sub->type != NODE_TYPE_OBJECT_ELEMENT) {
+                continue;
+              }
+
+              auto v = sub->getMember(0);
+
+              auto it = toFind.find(sub->getString());
+              if (it != toFind.end()) {
+                // we found one of the shard keys!
+                if (v->isConstant()) {
+                  // if the attribute value is a constant, we copy it into our
+                  // builder
+                  builder.add(VPackValue(sub->getString()));
+                  v->toVelocyPackValue(builder);
+                }
+                // remove the attribute from our to-do list
+                toFind.erase(it);
+              }
+            }
+
+            builder.close();
+
+            if (toFind.empty()) {
+              // all shard keys found!!
+              auto ci = ClusterInfo::instance();
+
+              if (ci != nullptr) {
+                // find the responsible shard for the data
+                bool usedDefaultSharding;
+                int res = ci->getResponsibleShard(collection->getCollection().get(), builder.slice(), true, shardId, usedDefaultSharding);
+                if (res != TRI_ERROR_NO_ERROR) {
+                  // some error occurred. better do not use the
+                  // single shard optimization here
+                  shardId.clear();
+                }
+              }
+            }
+          }
+        }
+        // if shardId is non-empty here, we will restrict the operation to a single shard
+        // in this case we must not ignore that a document was not found. in case we do
+        // the fan-out to all shards, we need to ignore that a document was not found on
+        // some of the shards
+        if (shardId.empty()) {  
+          auto* modNode = static_cast<ModificationNode*>(node);
+          modNode->getOptions().ignoreDocumentNotFound = true;
+        }
       }
     } else {
       TRI_ASSERT(false);
@@ -2670,7 +2766,7 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
 
     // insert a remote node
     ExecutionNode* remoteNode = new RemoteNode(
-        plan.get(), plan->nextId(), vocbase, collection, "", "", "");
+        plan.get(), plan->nextId(), vocbase, collection, "", shardId, "");
     plan->registerNode(remoteNode);
     TRI_ASSERT(scatterNode);
     remoteNode->addDependency(scatterNode);
@@ -2680,7 +2776,7 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
 
     // insert another remote node
     remoteNode = new RemoteNode(plan.get(), plan->nextId(), vocbase,
-                                collection, "", "", "");
+                                collection, "", shardId, "");
     plan->registerNode(remoteNode);
     TRI_ASSERT(node);
     remoteNode->addDependency(node);
@@ -2824,10 +2920,10 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
     if (nodeType == ExecutionNode::REMOVE ||
         nodeType == ExecutionNode::UPDATE) {
       if (!defaultSharding) {
-        // We have to use a ScatterNode.
         continue;
       }
     }
+
 
     // In the INSERT and REPLACE cases we use a DistributeNode...
 
@@ -2868,8 +2964,7 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
       TRI_ASSERT(node->getVariablesUsedHere().size() == 1);
 
       // in case of an INSERT, the DistributeNode is responsible for generating
-      // keys
-      // if none present
+      // keys if none present
       bool const createKeys = (nodeType == ExecutionNode::INSERT);
       inputVariable = node->getVariablesUsedHere()[0];
       distNode =

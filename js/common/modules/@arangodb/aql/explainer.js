@@ -1107,7 +1107,7 @@ function processQuery (query, explain) {
             return variableName(node.inVariable) + ' ' + keyword(node.ascending ? 'ASC' : 'DESC');
           }).join(', ');
       case 'LimitNode':
-        return keyword('LIMIT') + ' ' + value(JSON.stringify(node.offset)) + ', ' + value(JSON.stringify(node.limit));
+        return keyword('LIMIT') + ' ' + value(JSON.stringify(node.offset)) + ', ' + value(JSON.stringify(node.limit)) + (node.fullCount ? '  ' + annotation('/* fullCount */') : '');
       case 'ReturnNode':
         return keyword('RETURN') + ' ' + variableName(node.inVariable);
       case 'SubqueryNode':
@@ -1134,7 +1134,7 @@ function processQuery (query, explain) {
         modificationFlags = node.modificationFlags;
         return keyword('REMOVE') + ' ' + variableName(node.inVariable) + ' ' + keyword('IN') + ' ' + collection(node.collection);
       case 'RemoteNode':
-        return keyword('REMOTE');
+        return keyword('REMOTE') + (node.ownName !== '' ? '  ' + annotation('/* shard: ' + node.ownName + ' */') : '');
       case 'DistributeNode':
         return keyword('DISTRIBUTE');
       case 'ScatterNode':
