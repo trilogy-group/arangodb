@@ -1,5 +1,5 @@
 /*jshint globalstrict:false, strict:false, maxlen: 500 */
-/*global assertEqual, assertTrue, assertFalse, assertNull, assertMatch, fail, AQL_EXECUTE */
+/*global assertEqual, assertTrue, assertFalse, assertNull, assertMatch, fail, AQL_EXECUTE, AQL_EXPLAIN */
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief tests for query language, bind parameters
@@ -47,6 +47,10 @@ var sanitizeStats = function (stats) {
   return stats;
 };
 
+let hasDistributeNode = function(nodes) {
+  return (nodes.filter(function(node) { return node.type === 'DistributeNode'; }).length > 0);
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief test suite
 ////////////////////////////////////////////////////////////////////////////////
@@ -66,12 +70,84 @@ function ahuacatlModifySuite () {
     },
 
     // use default shard key (_key)
+    
+    testUpdateSingle : function () {
+      if (!isCluster) {
+        return;
+      }
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+      let key = c.insert({ id: "test", value: 1 })._key;
 
+      let expected = { writesExecuted: 1, writesIgnored: 0 };
+      let query = "UPDATE { _key: " + JSON.stringify(key) + ", id: 'test' } WITH { value: 2 } IN " + cn;
+      let actual = getModifyQueryResultsRaw(query);
+   
+      let nodes = AQL_EXPLAIN(query).plan.nodes;
+      assertFalse(hasDistributeNode(nodes));
+      let remoteNode = nodes[nodes.length - 2];
+      assertEqual("RemoteNode", remoteNode.type);
+      assertTrue(c.shards().indexOf(remoteNode.ownName) !== -1);
+
+      assertEqual(1, c.count());
+      assertEqual(0, actual.json.length);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testUpdateSingleShardKeyChange : function () {
+      if (!isCluster) {
+        return;
+      }
+      
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+      let key = c.insert({ id: "test", value: 1 })._key;
+
+      assertQueryError(errors.ERROR_CLUSTER_MUST_NOT_CHANGE_SHARDING_ATTRIBUTES.code, "UPDATE { _key: " + JSON.stringify(key) + ", id: 'test' } WITH { value: 2, id: 'bark' } IN " + cn);
+    },
+    
+    testReplaceSingle : function () {
+      if (!isCluster) {
+        return;
+      }
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+      let key = c.insert({ id: "test", value: 1 })._key;
+
+      let expected = { writesExecuted: 1, writesIgnored: 0 };
+      let query = "REPLACE { _key: " + JSON.stringify(key) + ", id: 'test' } WITH { id: 'test', value: 2 } IN " + cn;
+      let actual = getModifyQueryResultsRaw(query);
+   
+      let nodes = AQL_EXPLAIN(query).plan.nodes;
+      assertFalse(hasDistributeNode(nodes));
+      let remoteNode = nodes[nodes.length - 2];
+      assertEqual("RemoteNode", remoteNode.type);
+      assertTrue(c.shards().indexOf(remoteNode.ownName) !== -1);
+
+      assertEqual(1, c.count());
+      assertEqual(0, actual.json.length);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testReplaceSingleShardKeyChange : function () {
+      if (!isCluster) {
+        return;
+      }
+      
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+      let key = c.insert({ id: "test", value: 1 })._key;
+
+      assertQueryError(errors.ERROR_CLUSTER_MUST_NOT_CHANGE_SHARDING_ATTRIBUTES.code, "REPLACE { _key: " + JSON.stringify(key) + ", id: 'test' } WITH { value: 2, id: 'bark' } IN " + cn);
+    },
+    
     testInsertMainLevel : function () {
       let c = db._create(cn, {numberOfShards:5});
 
       let expected = { writesExecuted: 100, writesIgnored: 0 };
-      let actual = getModifyQueryResultsRaw("FOR i IN 1..100 INSERT { value: i } IN " + cn);
+      let query = "FOR i IN 1..100 INSERT { value: i } IN " + cn;
+      let actual = getModifyQueryResultsRaw(query);
+      
+      if (isCluster) {
+        let nodes = AQL_EXPLAIN(query).plan.nodes;
+        assertTrue(hasDistributeNode(nodes));
+      }
     
       assertEqual(100, c.count());
       assertEqual(0, actual.json.length);
@@ -82,7 +158,13 @@ function ahuacatlModifySuite () {
       let c = db._create(cn, {numberOfShards:5});
 
       let expected = { writesExecuted: 100, writesIgnored: 0 };
-      let actual = getModifyQueryResultsRaw("FOR i IN 1..100 INSERT { value: i } IN " + cn + " RETURN NEW");
+      let query = "FOR i IN 1..100 INSERT { value: i } IN " + cn + " RETURN NEW";
+      let actual = getModifyQueryResultsRaw(query);
+      
+      if (isCluster) {
+        let nodes = AQL_EXPLAIN(query).plan.nodes;
+        assertTrue(hasDistributeNode(nodes));
+      }
     
       assertEqual(100, c.count());
       assertEqual(100, actual.json.length);
@@ -121,7 +203,12 @@ function ahuacatlModifySuite () {
       }
 
       let expected = { writesExecuted: 100, writesIgnored: 0 };
-      let actual = getModifyQueryResultsRaw("FOR d IN " + cn + " REMOVE d IN " + cn);
+      let query = "FOR d IN " + cn + " REMOVE d IN " + cn;
+      let actual = getModifyQueryResultsRaw(query);
+      if (isCluster) {
+        let nodes = AQL_EXPLAIN(query).plan.nodes;
+        assertFalse(hasDistributeNode(nodes));
+      }
     
       assertEqual(0, c.count());
       assertEqual(0, actual.json.length);
@@ -136,7 +223,12 @@ function ahuacatlModifySuite () {
       }
 
       let expected = { writesExecuted: 100, writesIgnored: 0 };
-      let actual = getModifyQueryResultsRaw("FOR d IN " + cn + " REMOVE d IN " + cn + " RETURN OLD");
+      let query = "FOR d IN " + cn + " REMOVE d IN " + cn + " RETURN OLD";
+      let actual = getModifyQueryResultsRaw(query);
+      if (isCluster) {
+        let nodes = AQL_EXPLAIN(query).plan.nodes;
+        assertFalse(hasDistributeNode(nodes));
+      }
     
       assertEqual(0, c.count());
       assertEqual(100, actual.json.length);
@@ -183,7 +275,12 @@ function ahuacatlModifySuite () {
       }
 
       let expected = { writesExecuted: 100, writesIgnored: 0 };
-      let actual = getModifyQueryResultsRaw("FOR d IN " + cn + " UPDATE d WITH { value: 2 } IN " + cn);
+      let query = "FOR d IN " + cn + " UPDATE d WITH { value: 2 } IN " + cn;
+      let actual = getModifyQueryResultsRaw(query);
+      if (isCluster) {
+        let nodes = AQL_EXPLAIN(query).plan.nodes;
+        assertTrue(hasDistributeNode(nodes));
+      }
     
       assertEqual(100, c.count());
       assertEqual(0, actual.json.length);
@@ -198,7 +295,12 @@ function ahuacatlModifySuite () {
       }
 
       let expected = { writesExecuted: 100, writesIgnored: 0 };
-      let actual = getModifyQueryResultsRaw("FOR d IN " + cn + " UPDATE d WITH { value: 2 } IN " + cn + " RETURN OLD");
+      let query = "FOR d IN " + cn + " UPDATE d WITH { value: 2 } IN " + cn + " RETURN OLD";
+      let actual = getModifyQueryResultsRaw(query);
+      if (isCluster) {
+        let nodes = AQL_EXPLAIN(query).plan.nodes;
+        assertTrue(hasDistributeNode(nodes));
+      }
     
       assertEqual(100, c.count());
       assertEqual(100, actual.json.length);
@@ -544,7 +646,7 @@ function ahuacatlModifySuite () {
     
       assertEqual(100, c.count());
       assertEqual(1, actual.json.length);
-      assertEqual(isCluster ? 500 : 100, actual.json[0].length);
+      assertEqual(100, actual.json[0].length);
       assertEqual(expected, sanitizeStats(actual.stats));
     },
     
@@ -560,7 +662,100 @@ function ahuacatlModifySuite () {
     
       assertEqual(100, c.count());
       assertEqual(1, actual.json.length);
-      assertEqual(isCluster ? 500 : 100, actual.json[0].length);
+      assertEqual(100, actual.json[0].length);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testReplaceCustomShardKeyMainLevel : function () {
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+
+      for (let i = 0; i < 100; ++i) {
+        c.insert({ id: i });
+      }
+
+      let expected = { writesExecuted: 100, writesIgnored: 0 };
+      let actual = getModifyQueryResultsRaw("FOR d IN " + cn + " REPLACE d WITH { id: d.id, value: 2 } IN " + cn);
+    
+      assertEqual(100, c.count());
+      assertEqual(0, actual.json.length);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testReplaceCustomShardKeyMainLevelWithReturnOld : function () {
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+
+      for (let i = 0; i < 100; ++i) {
+        c.insert({ id: i });
+      }
+
+      let expected = { writesExecuted: 100, writesIgnored: 0 };
+      let actual = getModifyQueryResultsRaw("FOR d IN " + cn + " REPLACE d WITH { id: d.id, value: 2 } IN " + cn + " RETURN OLD");
+    
+      assertEqual(100, c.count());
+      assertEqual(100, actual.json.length);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testReplaceCustomShardKeyMainLevelWithReturnNew : function () {
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+
+      for (let i = 0; i < 100; ++i) {
+        c.insert({ id: i });
+      }
+
+      let expected = { writesExecuted: 100, writesIgnored: 0 };
+      let actual = getModifyQueryResultsRaw("FOR d IN " + cn + " REPLACE d WITH { id: d.id, value: 2 } IN " + cn + " RETURN NEW");
+    
+      assertEqual(100, c.count());
+      assertEqual(100, actual.json.length);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testReplaceCustomShardKeyInSubquery : function () {
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+
+      for (let i = 0; i < 100; ++i) {
+        c.insert({ id: i });
+      }
+
+      let expected = { writesExecuted: 100, writesIgnored: 0 };
+      let actual = getModifyQueryResultsRaw("RETURN (FOR d IN " + cn + " REPLACE d WITH { id: d.id, value: 2 } IN " + cn + ")");
+    
+      assertEqual(100, c.count());
+      assertEqual(1, actual.json.length);
+      assertEqual([ [ ] ], actual.json);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testReplaceCustomShardKeyInSubqueryWithReturnOld : function () {
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+
+      for (let i = 0; i < 100; ++i) {
+        c.insert({ id: i });
+      }
+
+      let expected = { writesExecuted: 100, writesIgnored: 0 };
+      let actual = getModifyQueryResultsRaw("RETURN (FOR d IN " + cn + " REPLACE d WITH { id: d.id, value: 2 } IN " + cn + " RETURN OLD)");
+    
+      assertEqual(100, c.count());
+      assertEqual(1, actual.json.length);
+      assertEqual(100, actual.json[0].length);
+      assertEqual(expected, sanitizeStats(actual.stats));
+    },
+    
+    testReplaceCustomShardKeyInSubqueryWithReturnNew : function () {
+      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
+
+      for (let i = 0; i < 100; ++i) {
+        c.insert({ id: i });
+      }
+
+      let expected = { writesExecuted: 100, writesIgnored: 0 };
+      let actual = getModifyQueryResultsRaw("RETURN (FOR d IN " + cn + " REPLACE d WITH { id: d.id, value: 2 } IN " + cn + " RETURN NEW)");
+    
+      assertEqual(100, c.count());
+      assertEqual(1, actual.json.length);
+      assertEqual(100, actual.json[0].length);
       assertEqual(expected, sanitizeStats(actual.stats));
     },
 

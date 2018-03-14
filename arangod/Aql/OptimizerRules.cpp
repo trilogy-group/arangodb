@@ -96,330 +96,431 @@ static aql::Variable const* getVariable(ExecutionNode const* node) {
   THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "node type does not have an out variable");
 }
 
+std::string getSingleShardId(ExecutionPlan const* plan, ModificationNode const* node) {
+  auto collection = node->collection();
+        
+  std::vector<Variable const*> v = node->getVariablesUsedHere();
+  Variable const* inputVariable;
+  if (v.size() > 1) {
+    // If there is a key variable:
+    inputVariable = v[1];
+  } else {
+    inputVariable = v[0];
+  }
+        
+  // check if we can easily find out the setter of the input variable
+  // (and if we can find it, check if the data is constant so we can look
+  // up the shard key attribute values)
+  auto setter = plan->getVarSetBy(inputVariable->id);
+
+  if (setter == nullptr || setter->getType() != ExecutionNode::CALCULATION) {
+    // so far we can only handle calculation nodes here
+    return std::string();
+  }
+
+  CalculationNode const* c = static_cast<CalculationNode const*>(setter);
+  auto ex = c->expression();
+
+  if (ex == nullptr) {
+    return std::string();
+  }
+
+  auto n = ex->node();
+  if (n == nullptr || !n->isObject()) {
+    return std::string();
+  }
+      
+  // TODO: handle string key input if shard key is _key
+
+  // note for which shard keys we need to look for
+  auto shardKeys = collection->shardKeys();
+  std::unordered_set<std::string> toFind;
+  for (auto const& it : shardKeys) {
+    toFind.emplace(it);
+  }
+      
+  VPackBuilder builder;
+  builder.openObject();
+      
+  // go through the input object attribute by attribute
+  // and look for our shard keys
+  for (size_t i = 0; i < n->numMembers(); ++i) {
+    auto sub = n->getMember(i);
+
+    if (sub->type != NODE_TYPE_OBJECT_ELEMENT) {
+      continue;
+    }
+
+    auto it = toFind.find(sub->getString());
+
+    if (it != toFind.end()) {
+      // we found one of the shard keys!
+      auto v = sub->getMember(0);
+      if (v->isConstant()) {
+        // if the attribute value is a constant, we copy it into our
+        // builder
+        builder.add(VPackValue(sub->getString()));
+        v->toVelocyPackValue(builder);
+      }
+      // remove the attribute from our to-do list
+      toFind.erase(it);
+    }
+  }
+
+  builder.close();
+
+  if (!toFind.empty()) {
+    return std::string();
+  }
+
+  // all shard keys found!!
+  auto ci = ClusterInfo::instance();
+
+  if (ci == nullptr) {
+    return std::string();
+  }
+
+  // find the responsible shard for the data
+  bool usedDefaultSharding;
+  std::string shardId;
+
+  int res = ci->getResponsibleShard(collection->getCollection().get(), builder.slice(), true, shardId, usedDefaultSharding);
+
+  if (res != TRI_ERROR_NO_ERROR) {
+    // some error occurred. better do not use the
+    // single shard optimization here
+    return std::string();
+  }
+
+  // we will only need a single shard!
+  return shardId;
+}
+
+
 }
 
 /// @brief adds a SORT operation for IN right-hand side operands
 void arangodb::aql::sortInValuesRule(Optimizer* opt,
-                                     std::unique_ptr<ExecutionPlan> plan,
-                                     OptimizerRule const* rule) {
-  SmallVector<ExecutionNode*>::allocator_type::arena_type a;
-  SmallVector<ExecutionNode*> nodes{a};
-  plan->findNodesOfType(nodes, EN::FILTER, true);
+                                std::unique_ptr<ExecutionPlan> plan,
+                                OptimizerRule const* rule) {
+SmallVector<ExecutionNode*>::allocator_type::arena_type a;
+SmallVector<ExecutionNode*> nodes{a};
+plan->findNodesOfType(nodes, EN::FILTER, true);
 
-  bool modified = false;
+bool modified = false;
 
-  for (auto const& n : nodes) {
-    // filter nodes always have one input variable
-    auto varsUsedHere = n->getVariablesUsedHere();
-    TRI_ASSERT(varsUsedHere.size() == 1);
+for (auto const& n : nodes) {
+// filter nodes always have one input variable
+auto varsUsedHere = n->getVariablesUsedHere();
+TRI_ASSERT(varsUsedHere.size() == 1);
 
-    // now check who introduced our variable
-    auto variable = varsUsedHere[0];
-    auto setter = plan->getVarSetBy(variable->id);
+// now check who introduced our variable
+auto variable = varsUsedHere[0];
+auto setter = plan->getVarSetBy(variable->id);
 
-    if (setter == nullptr || setter->getType() != EN::CALCULATION) {
-      // filter variable was not introduced by a calculation.
-      continue;
-    }
+if (setter == nullptr || setter->getType() != EN::CALCULATION) {
+// filter variable was not introduced by a calculation.
+continue;
+}
 
-    // filter variable was introduced a CalculationNode. now check the
-    // expression
-    auto s = static_cast<CalculationNode*>(setter);
-    auto filterExpression = s->expression();
-    auto const* inNode = filterExpression->node();
+// filter variable was introduced a CalculationNode. now check the
+// expression
+auto s = static_cast<CalculationNode*>(setter);
+auto filterExpression = s->expression();
+auto const* inNode = filterExpression->node();
 
-    TRI_ASSERT(inNode != nullptr);
+TRI_ASSERT(inNode != nullptr);
 
-    // check the filter condition
-    if ((inNode->type != NODE_TYPE_OPERATOR_BINARY_IN &&
-         inNode->type != NODE_TYPE_OPERATOR_BINARY_NIN) ||
-        inNode->canThrow() || !inNode->isDeterministic()) {
-      // we better not tamper with this filter
-      continue;
-    }
+// check the filter condition
+if ((inNode->type != NODE_TYPE_OPERATOR_BINARY_IN &&
+    inNode->type != NODE_TYPE_OPERATOR_BINARY_NIN) ||
+  inNode->canThrow() || !inNode->isDeterministic()) {
+// we better not tamper with this filter
+continue;
+}
 
-    auto rhs = inNode->getMember(1);
+auto rhs = inNode->getMember(1);
 
-    if (rhs->type != NODE_TYPE_REFERENCE) {
-      continue;
-    }
+if (rhs->type != NODE_TYPE_REFERENCE) {
+continue;
+}
 
-    auto loop = n->getLoop();
+auto loop = n->getLoop();
 
-    if (loop == nullptr) {
-      // FILTER is not used inside a loop. so it will be used at most once
-      // not need to sort the IN values then
-      continue;
-    }
+if (loop == nullptr) {
+// FILTER is not used inside a loop. so it will be used at most once
+// not need to sort the IN values then
+continue;
+}
 
-    variable = static_cast<Variable const*>(rhs->getData());
-    setter = plan->getVarSetBy(variable->id);
+variable = static_cast<Variable const*>(rhs->getData());
+setter = plan->getVarSetBy(variable->id);
 
-    if (setter == nullptr || (setter->getType() != EN::CALCULATION &&
-                              setter->getType() != EN::SUBQUERY)) {
-      // variable itself was not introduced by a calculation.
-      continue;
-    }
+if (setter == nullptr || (setter->getType() != EN::CALCULATION &&
+                        setter->getType() != EN::SUBQUERY)) {
+// variable itself was not introduced by a calculation.
+continue;
+}
 
-    if (loop == setter->getLoop()) {
-      // the FILTER and its value calculation are contained in the same loop
-      // this means the FILTER will be executed as many times as its value
-      // calculation. sorting the IN values will not provide a benefit here
-      continue;
-    }
+if (loop == setter->getLoop()) {
+// the FILTER and its value calculation are contained in the same loop
+// this means the FILTER will be executed as many times as its value
+// calculation. sorting the IN values will not provide a benefit here
+continue;
+}
 
-    auto ast = plan->getAst();
-    AstNode const* originalArg = nullptr;
+auto ast = plan->getAst();
+AstNode const* originalArg = nullptr;
 
-    if (setter->getType() == EN::CALCULATION) {
-      AstNode const* originalNode =
-          static_cast<CalculationNode*>(setter)->expression()->node();
-      TRI_ASSERT(originalNode != nullptr);
+if (setter->getType() == EN::CALCULATION) {
+AstNode const* originalNode =
+    static_cast<CalculationNode*>(setter)->expression()->node();
+TRI_ASSERT(originalNode != nullptr);
 
-      AstNode const* testNode = originalNode;
+AstNode const* testNode = originalNode;
 
-      if (originalNode->type == NODE_TYPE_FCALL &&
-          static_cast<Function const*>(originalNode->getData())->name ==
-              "NOOPT") {
-        // bypass NOOPT(...)
-        TRI_ASSERT(originalNode->numMembers() == 1);
-        auto args = originalNode->getMember(0);
+if (originalNode->type == NODE_TYPE_FCALL &&
+    static_cast<Function const*>(originalNode->getData())->name ==
+        "NOOPT") {
+  // bypass NOOPT(...)
+  TRI_ASSERT(originalNode->numMembers() == 1);
+  auto args = originalNode->getMember(0);
 
-        if (args->numMembers() > 0) {
-          testNode = args->getMember(0);
-        }
-      }
-
-      if (testNode->type == NODE_TYPE_VALUE ||
-          testNode->type == NODE_TYPE_OBJECT) {
-        // not really usable...
-        continue;
-      }
-
-      if (testNode->type == NODE_TYPE_ARRAY &&
-          testNode->numMembers() < AstNode::SortNumberThreshold) {
-        // number of values is below threshold
-        continue;
-      }
-
-      if (testNode->isSorted()) {
-        // already sorted
-        continue;
-      }
-
-      originalArg = originalNode;
-    } else {
-      TRI_ASSERT(setter->getType() == EN::SUBQUERY);
-      auto sub = static_cast<SubqueryNode*>(setter);
-
-      // estimate items in subquery
-      size_t nrItems = 0;
-      sub->getSubquery()->getCost(nrItems);
-
-      if (nrItems < AstNode::SortNumberThreshold) {
-        continue;
-      }
-
-      originalArg = ast->createNodeReference(sub->outVariable());
-    }
-
-    TRI_ASSERT(originalArg != nullptr);
-
-    auto args = ast->createNodeArray();
-    args->addMember(originalArg);
-    auto sorted = ast->createNodeFunctionCall(TRI_CHAR_LENGTH_PAIR("SORTED_UNIQUE"), args);
-
-    auto outVar = ast->variables()->createTemporaryVariable();
-    ExecutionNode* calculationNode = nullptr;
-    auto expression = new Expression(plan.get(), ast, sorted);
-    try {
-      calculationNode =
-          new CalculationNode(plan.get(), plan->nextId(), expression, outVar);
-    } catch (...) {
-      delete expression;
-      throw;
-    }
-    plan->registerNode(calculationNode);
-
-    // make the new node a parent of the original calculation node
-    TRI_ASSERT(setter != nullptr);
-    calculationNode->addDependency(setter);
-    auto oldParent = setter->getFirstParent();
-    TRI_ASSERT(oldParent != nullptr);
-    calculationNode->addParent(oldParent);
-
-    oldParent->removeDependencies();
-    oldParent->addDependency(calculationNode);
-    setter->setParent(calculationNode);
-
-    if (setter->getType() == EN::CALCULATION) {
-      // mark the original node as being removable, even if it can throw
-      // this is special as the optimizer will normally not remove any nodes
-      // if they throw - even when fully unused otherwise
-      static_cast<CalculationNode*>(setter)->canRemoveIfThrows(true);
-    }
-
-    AstNode* clone = ast->clone(inNode);
-    // set sortedness bit for the IN operator
-    clone->setBoolValue(true);
-    // finally adjust the variable inside the IN calculation
-    clone->changeMember(1, ast->createNodeReference(outVar));
-    filterExpression->replaceNode(clone);
-
-    modified = true;
+  if (args->numMembers() > 0) {
+    testNode = args->getMember(0);
   }
+}
 
-  opt->addPlan(std::move(plan), rule, modified);
+if (testNode->type == NODE_TYPE_VALUE ||
+    testNode->type == NODE_TYPE_OBJECT) {
+  // not really usable...
+  continue;
+}
+
+if (testNode->type == NODE_TYPE_ARRAY &&
+    testNode->numMembers() < AstNode::SortNumberThreshold) {
+  // number of values is below threshold
+  continue;
+}
+
+if (testNode->isSorted()) {
+  // already sorted
+  continue;
+}
+
+originalArg = originalNode;
+} else {
+TRI_ASSERT(setter->getType() == EN::SUBQUERY);
+auto sub = static_cast<SubqueryNode*>(setter);
+
+// estimate items in subquery
+size_t nrItems = 0;
+sub->getSubquery()->getCost(nrItems);
+
+if (nrItems < AstNode::SortNumberThreshold) {
+  continue;
+}
+
+originalArg = ast->createNodeReference(sub->outVariable());
+}
+
+TRI_ASSERT(originalArg != nullptr);
+
+auto args = ast->createNodeArray();
+args->addMember(originalArg);
+auto sorted = ast->createNodeFunctionCall(TRI_CHAR_LENGTH_PAIR("SORTED_UNIQUE"), args);
+
+auto outVar = ast->variables()->createTemporaryVariable();
+ExecutionNode* calculationNode = nullptr;
+auto expression = new Expression(plan.get(), ast, sorted);
+try {
+calculationNode =
+    new CalculationNode(plan.get(), plan->nextId(), expression, outVar);
+} catch (...) {
+delete expression;
+throw;
+}
+plan->registerNode(calculationNode);
+
+// make the new node a parent of the original calculation node
+TRI_ASSERT(setter != nullptr);
+calculationNode->addDependency(setter);
+auto oldParent = setter->getFirstParent();
+TRI_ASSERT(oldParent != nullptr);
+calculationNode->addParent(oldParent);
+
+oldParent->removeDependencies();
+oldParent->addDependency(calculationNode);
+setter->setParent(calculationNode);
+
+if (setter->getType() == EN::CALCULATION) {
+// mark the original node as being removable, even if it can throw
+// this is special as the optimizer will normally not remove any nodes
+// if they throw - even when fully unused otherwise
+static_cast<CalculationNode*>(setter)->canRemoveIfThrows(true);
+}
+
+AstNode* clone = ast->clone(inNode);
+// set sortedness bit for the IN operator
+clone->setBoolValue(true);
+// finally adjust the variable inside the IN calculation
+clone->changeMember(1, ast->createNodeReference(outVar));
+filterExpression->replaceNode(clone);
+
+modified = true;
+}
+
+opt->addPlan(std::move(plan), rule, modified);
 }
 
 /// @brief remove redundant sorts
 /// this rule modifies the plan in place:
 /// - sorts that are covered by earlier sorts will be removed
 void arangodb::aql::removeRedundantSortsRule(
-    Optimizer* opt, std::unique_ptr<ExecutionPlan> plan,
-    OptimizerRule const* rule) {
-  SmallVector<ExecutionNode*>::allocator_type::arena_type a;
-  SmallVector<ExecutionNode*> nodes{a};
-  plan->findNodesOfType(nodes, EN::SORT, true);
+Optimizer* opt, std::unique_ptr<ExecutionPlan> plan,
+OptimizerRule const* rule) {
+SmallVector<ExecutionNode*>::allocator_type::arena_type a;
+SmallVector<ExecutionNode*> nodes{a};
+plan->findNodesOfType(nodes, EN::SORT, true);
 
-  if (nodes.empty()) {
-    // quick exit
-    opt->addPlan(std::move(plan), rule, false);
-    return;
-  }
+if (nodes.empty()) {
+// quick exit
+opt->addPlan(std::move(plan), rule, false);
+return;
+}
 
-  std::unordered_set<ExecutionNode*> toUnlink;
-  arangodb::basics::StringBuffer buffer(false);
+std::unordered_set<ExecutionNode*> toUnlink;
+arangodb::basics::StringBuffer buffer(false);
 
-  for (auto const& n : nodes) {
-    if (toUnlink.find(n) != toUnlink.end()) {
-      // encountered a sort node that we already deleted
-      continue;
-    }
+for (auto const& n : nodes) {
+if (toUnlink.find(n) != toUnlink.end()) {
+// encountered a sort node that we already deleted
+continue;
+}
 
-    auto const sortNode = static_cast<SortNode*>(n);
+auto const sortNode = static_cast<SortNode*>(n);
 
-    auto sortInfo = sortNode->getSortInformation(plan.get(), &buffer);
+auto sortInfo = sortNode->getSortInformation(plan.get(), &buffer);
 
-    if (sortInfo.isValid && !sortInfo.criteria.empty()) {
-      // we found a sort that we can understand
-      std::vector<ExecutionNode*> stack;
+if (sortInfo.isValid && !sortInfo.criteria.empty()) {
+// we found a sort that we can understand
+std::vector<ExecutionNode*> stack;
 
-      sortNode->addDependencies(stack);
+sortNode->addDependencies(stack);
 
-      int nodesRelyingOnSort = 0;
+int nodesRelyingOnSort = 0;
 
-      while (!stack.empty()) {
-        auto current = stack.back();
-        stack.pop_back();
+while (!stack.empty()) {
+  auto current = stack.back();
+  stack.pop_back();
 
-        if (current->getType() == EN::SORT) {
-          // we found another sort. now check if they are compatible!
+  if (current->getType() == EN::SORT) {
+    // we found another sort. now check if they are compatible!
 
-          auto other = static_cast<SortNode*>(current)->getSortInformation(
-              plan.get(), &buffer);
+    auto other = static_cast<SortNode*>(current)->getSortInformation(
+        plan.get(), &buffer);
 
-          switch (sortInfo.isCoveredBy(other)) {
-            case SortInformation::unequal: {
-              // different sort criteria
-              if (nodesRelyingOnSort == 0) {
-                // a sort directly followed by another sort: now remove one of
-                // them
-
-                if (other.canThrow || !other.isDeterministic) {
-                  // if the sort can throw or is non-deterministic, we must not
-                  // remove it
-                  break;
-                }
-
-                if (sortNode->isStable()) {
-                  // we should not optimize predecessors of a stable sort (used
-                  // in a COLLECT node)
-                  // the stable sort is for a reason, and removing any
-                  // predecessors sorts might
-                  // change the result
-                  break;
-                }
-
-                // remove sort that is a direct predecessor of a sort
-                toUnlink.emplace(current);
-              }
-              break;
-            }
-
-            case SortInformation::otherLessAccurate: {
-              toUnlink.emplace(current);
-              break;
-            }
-
-            case SortInformation::ourselvesLessAccurate: {
-              // the sort at the start of the pipeline makes the sort at the end
-              // superfluous, so we'll remove it
-              toUnlink.emplace(n);
-              break;
-            }
-
-            case SortInformation::allEqual: {
-              // the sort at the end of the pipeline makes the sort at the start
-              // superfluous, so we'll remove it
-              toUnlink.emplace(current);
-              break;
-            }
-          }
-        } else if (current->getType() == EN::FILTER) {
-          // ok: a filter does not depend on sort order
-        } else if (current->getType() == EN::CALCULATION) {
-          // ok: a filter does not depend on sort order only if it does not
-          // throw
-          if (current->canThrow()) {
-            ++nodesRelyingOnSort;
-          }
-        } else if (current->getType() == EN::ENUMERATE_LIST ||
-                   current->getType() == EN::ENUMERATE_COLLECTION ||
-                   current->getType() == EN::TRAVERSAL ||
-                   current->getType() == EN::SHORTEST_PATH) {
-          // ok, but we cannot remove two different sorts if one of these node
-          // types is between them
-          // example: in the following query, the one sort will be optimized
-          // away:
-          //   FOR i IN [ { a: 1 }, { a: 2 } , { a: 3 } ] SORT i.a ASC SORT i.a
-          //   DESC RETURN i
-          // but in the following query, the sorts will stay:
-          //   FOR i IN [ { a: 1 }, { a: 2 } , { a: 3 } ] SORT i.a ASC LET a =
-          //   i.a SORT i.a DESC RETURN i
-          ++nodesRelyingOnSort;
-        } else {
-          // abort at all other type of nodes. we cannot remove a sort beyond
+    switch (sortInfo.isCoveredBy(other)) {
+      case SortInformation::unequal: {
+        // different sort criteria
+        if (nodesRelyingOnSort == 0) {
+          // a sort directly followed by another sort: now remove one of
           // them
-          // this includes COLLECT and LIMIT
-          break;
-        }
 
-        if (!current->hasDependency()) {
-          // node either has no or more than one dependency. we don't know what
-          // to do and must abort
-          // note: this will also handle Singleton nodes
-          break;
-        }
+          if (other.canThrow || !other.isDeterministic) {
+            // if the sort can throw or is non-deterministic, we must not
+            // remove it
+            break;
+          }
 
-        current->addDependencies(stack);
+          if (sortNode->isStable()) {
+            // we should not optimize predecessors of a stable sort (used
+            // in a COLLECT node)
+            // the stable sort is for a reason, and removing any
+            // predecessors sorts might
+            // change the result
+            break;
+          }
+
+          // remove sort that is a direct predecessor of a sort
+          toUnlink.emplace(current);
+        }
+        break;
       }
 
-      if (toUnlink.find(n) == toUnlink.end() &&
-          sortNode->simplify(plan.get())) {
-        // sort node had only constant expressions. it will make no difference
-        // if we execute it or not
-        // so we can remove it
+      case SortInformation::otherLessAccurate: {
+        toUnlink.emplace(current);
+        break;
+      }
+
+      case SortInformation::ourselvesLessAccurate: {
+        // the sort at the start of the pipeline makes the sort at the end
+        // superfluous, so we'll remove it
         toUnlink.emplace(n);
+        break;
+      }
+
+      case SortInformation::allEqual: {
+        // the sort at the end of the pipeline makes the sort at the start
+        // superfluous, so we'll remove it
+        toUnlink.emplace(current);
+        break;
       }
     }
+  } else if (current->getType() == EN::FILTER) {
+    // ok: a filter does not depend on sort order
+  } else if (current->getType() == EN::CALCULATION) {
+    // ok: a filter does not depend on sort order only if it does not
+    // throw
+    if (current->canThrow()) {
+      ++nodesRelyingOnSort;
+    }
+  } else if (current->getType() == EN::ENUMERATE_LIST ||
+              current->getType() == EN::ENUMERATE_COLLECTION ||
+              current->getType() == EN::TRAVERSAL ||
+              current->getType() == EN::SHORTEST_PATH) {
+    // ok, but we cannot remove two different sorts if one of these node
+    // types is between them
+    // example: in the following query, the one sort will be optimized
+    // away:
+    //   FOR i IN [ { a: 1 }, { a: 2 } , { a: 3 } ] SORT i.a ASC SORT i.a
+    //   DESC RETURN i
+    // but in the following query, the sorts will stay:
+    //   FOR i IN [ { a: 1 }, { a: 2 } , { a: 3 } ] SORT i.a ASC LET a =
+    //   i.a SORT i.a DESC RETURN i
+    ++nodesRelyingOnSort;
+  } else {
+    // abort at all other type of nodes. we cannot remove a sort beyond
+    // them
+    // this includes COLLECT and LIMIT
+    break;
   }
 
-  if (!toUnlink.empty()) {
-    plan->unlinkNodes(toUnlink);
+  if (!current->hasDependency()) {
+    // node either has no or more than one dependency. we don't know what
+    // to do and must abort
+    // note: this will also handle Singleton nodes
+    break;
   }
 
-  opt->addPlan(std::move(plan), rule, !toUnlink.empty());
+  current->addDependencies(stack);
+}
+
+if (toUnlink.find(n) == toUnlink.end() &&
+    sortNode->simplify(plan.get())) {
+  // sort node had only constant expressions. it will make no difference
+  // if we execute it or not
+  // so we can remove it
+  toUnlink.emplace(n);
+}
+}
+}
+
+if (!toUnlink.empty()) {
+plan->unlinkNodes(toUnlink);
+}
+
+opt->addPlan(std::move(plan), rule, !toUnlink.empty());
 }
 
 /// @brief remove all unnecessary filters
@@ -427,151 +528,151 @@ void arangodb::aql::removeRedundantSortsRule(
 /// - filters that are always true are removed completely
 /// - filters that are always false will be replaced by a NoResults node
 void arangodb::aql::removeUnnecessaryFiltersRule(
-    Optimizer* opt, std::unique_ptr<ExecutionPlan> plan,
-    OptimizerRule const* rule) {
-  SmallVector<ExecutionNode*>::allocator_type::arena_type a;
-  SmallVector<ExecutionNode*> nodes{a};
-  plan->findNodesOfType(nodes, EN::FILTER, true);
+Optimizer* opt, std::unique_ptr<ExecutionPlan> plan,
+OptimizerRule const* rule) {
+SmallVector<ExecutionNode*>::allocator_type::arena_type a;
+SmallVector<ExecutionNode*> nodes{a};
+plan->findNodesOfType(nodes, EN::FILTER, true);
 
-  bool modified = false;
-  std::unordered_set<ExecutionNode*> toUnlink;
+bool modified = false;
+std::unordered_set<ExecutionNode*> toUnlink;
 
-  for (auto const& n : nodes) {
-    // filter nodes always have one input variable
-    auto varsUsedHere = n->getVariablesUsedHere();
-    TRI_ASSERT(varsUsedHere.size() == 1);
+for (auto const& n : nodes) {
+// filter nodes always have one input variable
+auto varsUsedHere = n->getVariablesUsedHere();
+TRI_ASSERT(varsUsedHere.size() == 1);
 
-    // now check who introduced our variable
-    auto variable = varsUsedHere[0];
-    auto setter = plan->getVarSetBy(variable->id);
+// now check who introduced our variable
+auto variable = varsUsedHere[0];
+auto setter = plan->getVarSetBy(variable->id);
 
-    if (setter == nullptr || setter->getType() != EN::CALCULATION) {
-      // filter variable was not introduced by a calculation.
-      continue;
-    }
+if (setter == nullptr || setter->getType() != EN::CALCULATION) {
+// filter variable was not introduced by a calculation.
+continue;
+}
 
-    // filter variable was introduced a CalculationNode. now check the
-    // expression
-    auto s = static_cast<CalculationNode*>(setter);
-    auto root = s->expression()->node();
+// filter variable was introduced a CalculationNode. now check the
+// expression
+auto s = static_cast<CalculationNode*>(setter);
+auto root = s->expression()->node();
 
-    TRI_ASSERT(root != nullptr);
+TRI_ASSERT(root != nullptr);
 
-    if (root->canThrow() || !root->isDeterministic()) {
-      // we better not tamper with this filter
-      continue;
-    }
+if (root->canThrow() || !root->isDeterministic()) {
+// we better not tamper with this filter
+continue;
+}
 
-    // filter expression is constant and thus cannot throw
-    // we can now evaluate it safely
+// filter expression is constant and thus cannot throw
+// we can now evaluate it safely
 
-    if (root->isTrue()) {
-      // filter is always true
-      // remove filter node and merge with following node
-      toUnlink.emplace(n);
-      modified = true;
-    } else if (root->isFalse()) {
-      // filter is always false
-      // now insert a NoResults node below it
-      auto noResults = new NoResultsNode(plan.get(), plan->nextId());
-      plan->registerNode(noResults);
-      plan->replaceNode(n, noResults);
-      modified = true;
-    }
-  }
+if (root->isTrue()) {
+// filter is always true
+// remove filter node and merge with following node
+toUnlink.emplace(n);
+modified = true;
+} else if (root->isFalse()) {
+// filter is always false
+// now insert a NoResults node below it
+auto noResults = new NoResultsNode(plan.get(), plan->nextId());
+plan->registerNode(noResults);
+plan->replaceNode(n, noResults);
+modified = true;
+}
+}
 
-  if (!toUnlink.empty()) {
-    plan->unlinkNodes(toUnlink);
-  }
+if (!toUnlink.empty()) {
+plan->unlinkNodes(toUnlink);
+}
 
-  opt->addPlan(std::move(plan), rule, modified);
+opt->addPlan(std::move(plan), rule, modified);
 }
 
 /// @brief remove INTO of a COLLECT if not used
 /// additionally remove all unused aggregate calculations from a COLLECT
 void arangodb::aql::removeCollectVariablesRule(
-    Optimizer* opt, std::unique_ptr<ExecutionPlan> plan,
-    OptimizerRule const* rule) {
-  SmallVector<ExecutionNode*>::allocator_type::arena_type a;
-  SmallVector<ExecutionNode*> nodes{a};
-  plan->findNodesOfType(nodes, EN::COLLECT, true);
+Optimizer* opt, std::unique_ptr<ExecutionPlan> plan,
+OptimizerRule const* rule) {
+SmallVector<ExecutionNode*>::allocator_type::arena_type a;
+SmallVector<ExecutionNode*> nodes{a};
+plan->findNodesOfType(nodes, EN::COLLECT, true);
 
-  bool modified = false;
+bool modified = false;
 
-  for (auto const& n : nodes) {
-    auto collectNode = static_cast<CollectNode*>(n);
-    TRI_ASSERT(collectNode != nullptr);
+for (auto const& n : nodes) {
+auto collectNode = static_cast<CollectNode*>(n);
+TRI_ASSERT(collectNode != nullptr);
 
-    auto varsUsedLater = n->getVarsUsedLater();
-    auto outVariable = collectNode->outVariable();
+auto varsUsedLater = n->getVarsUsedLater();
+auto outVariable = collectNode->outVariable();
 
-    if (outVariable != nullptr &&
-        varsUsedLater.find(outVariable) == varsUsedLater.end()) {
-      // outVariable not used later
-      collectNode->clearOutVariable();
+if (outVariable != nullptr &&
+  varsUsedLater.find(outVariable) == varsUsedLater.end()) {
+// outVariable not used later
+collectNode->clearOutVariable();
+modified = true;
+}
+
+collectNode->clearAggregates(
+  [&varsUsedLater, &modified](
+      std::pair<Variable const*,
+                std::pair<Variable const*, std::string>> const& aggregate)
+      -> bool {
+    if (varsUsedLater.find(aggregate.first) == varsUsedLater.end()) {
+      // result of aggregate function not used later
       modified = true;
+      return true;
     }
+    return false;
+  });
+}
 
-    collectNode->clearAggregates(
-        [&varsUsedLater, &modified](
-            std::pair<Variable const*,
-                      std::pair<Variable const*, std::string>> const& aggregate)
-            -> bool {
-          if (varsUsedLater.find(aggregate.first) == varsUsedLater.end()) {
-            // result of aggregate function not used later
-            modified = true;
-            return true;
-          }
-          return false;
-        });
-  }
-
-  opt->addPlan(std::move(plan), rule, modified);
+opt->addPlan(std::move(plan), rule, modified);
 }
 
 class PropagateConstantAttributesHelper {
- public:
-  PropagateConstantAttributesHelper() : _constants(), _modified(false) {}
+public:
+PropagateConstantAttributesHelper() : _constants(), _modified(false) {}
 
-  bool modified() const { return _modified; }
+bool modified() const { return _modified; }
 
-  /// @brief inspects a plan and propages constant values in expressions
-  void propagateConstants(ExecutionPlan* plan) {
-    SmallVector<ExecutionNode*>::allocator_type::arena_type a;
-    SmallVector<ExecutionNode*> nodes{a};
-    plan->findNodesOfType(nodes, EN::FILTER, true);
+/// @brief inspects a plan and propages constant values in expressions
+void propagateConstants(ExecutionPlan* plan) {
+SmallVector<ExecutionNode*>::allocator_type::arena_type a;
+SmallVector<ExecutionNode*> nodes{a};
+plan->findNodesOfType(nodes, EN::FILTER, true);
 
-    for (auto const& node : nodes) {
-      auto fn = static_cast<FilterNode*>(node);
+for (auto const& node : nodes) {
+auto fn = static_cast<FilterNode*>(node);
 
-      auto inVar = fn->getVariablesUsedHere();
-      TRI_ASSERT(inVar.size() == 1);
+auto inVar = fn->getVariablesUsedHere();
+TRI_ASSERT(inVar.size() == 1);
 
-      auto setter = plan->getVarSetBy(inVar[0]->id);
-      if (setter != nullptr && setter->getType() == EN::CALCULATION) {
-        auto cn = static_cast<CalculationNode*>(setter);
-        auto expression = cn->expression();
+auto setter = plan->getVarSetBy(inVar[0]->id);
+if (setter != nullptr && setter->getType() == EN::CALCULATION) {
+  auto cn = static_cast<CalculationNode*>(setter);
+  auto expression = cn->expression();
 
-        if (expression != nullptr) {
-          collectConstantAttributes(const_cast<AstNode*>(expression->node()));
-        }
-      }
-    }
+  if (expression != nullptr) {
+    collectConstantAttributes(const_cast<AstNode*>(expression->node()));
+  }
+}
+}
 
-    if (!_constants.empty()) {
-      for (auto const& node : nodes) {
-        auto fn = static_cast<FilterNode*>(node);
+if (!_constants.empty()) {
+for (auto const& node : nodes) {
+  auto fn = static_cast<FilterNode*>(node);
 
-        auto inVar = fn->getVariablesUsedHere();
-        TRI_ASSERT(inVar.size() == 1);
+  auto inVar = fn->getVariablesUsedHere();
+  TRI_ASSERT(inVar.size() == 1);
 
-        auto setter = plan->getVarSetBy(inVar[0]->id);
-        if (setter != nullptr && setter->getType() == EN::CALCULATION) {
-          auto cn = static_cast<CalculationNode*>(setter);
-          auto expression = cn->expression();
+  auto setter = plan->getVarSetBy(inVar[0]->id);
+  if (setter != nullptr && setter->getType() == EN::CALCULATION) {
+    auto cn = static_cast<CalculationNode*>(setter);
+    auto expression = cn->expression();
 
-          if (expression != nullptr) {
-            insertConstantAttributes(const_cast<AstNode*>(expression->node()));
+    if (expression != nullptr) {
+      insertConstantAttributes(const_cast<AstNode*>(expression->node()));
           }
         }
       }
@@ -2651,99 +2752,18 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
                nodeType == ExecutionNode::UPSERT) {
       vocbase = static_cast<ModificationNode*>(node)->vocbase();
       collection = static_cast<ModificationNode*>(node)->collection();
-      if (nodeType == ExecutionNode::REMOVE ||
-          nodeType == ExecutionNode::UPDATE) {
-        // Note that in the REPLACE or UPSERT case we are not getting here,
+      if (nodeType == ExecutionNode::INSERT ||
+          nodeType == ExecutionNode::REMOVE ||
+          nodeType == ExecutionNode::UPDATE ||
+          nodeType == ExecutionNode::REPLACE) {
+        // Note that in the UPSERT case we are not getting here,
         // since the distributeInClusterRule fires and a DistributionNode is
         // used.
         
         // additionally check if we can restrict the data modification operation
         // to just a single shard
-        auto shardKeys = collection->shardKeys();
-      
-        std::vector<Variable const*> v = node->getVariablesUsedHere();
-        Variable const* inputVariable;
-        if (v.size() > 1) {
-          // If there is a key variable:
-          inputVariable = v[1];
-          // This is the _inKeyVariable! This works, since we use a ScatterNode
-          // for non-default-sharding attributes.
-        } else {
-          // was only UPDATE <doc> IN <collection> or a REMOVE (REMOVE only has
-          // a single input variable)
-          inputVariable = v[0];
-        }
-
-        // check if we can easily find out the setter of the input variable
-        // (and if we can find it, check if the data is constant so we can look
-        // up the shard key attribute values)
-        auto setter = plan->getVarSetBy(inputVariable->id);
-
-        if (setter != nullptr &&
-            setter->getType() == ExecutionNode::CALCULATION) {
-          // so far we can only handle calculation nodes here
-          CalculationNode const* c = static_cast<CalculationNode const*>(setter);
-          auto ex = c->expression();
-          TRI_ASSERT(ex != nullptr);
-
-          auto n = ex->node();
-          if (n != nullptr && n->isObject()) {
-            // the input for UPDATE/REMOVE is an object
-            // now inspect it
-            // TODO: handle string key input if shard key is _key
-
-            // note for which shard keys we need to look for
-            std::unordered_set<std::string> toFind;
-            for (auto const& it : shardKeys) {
-              toFind.emplace(it);
-            }
-            
-            VPackBuilder builder;
-            builder.openObject();
-            
-            // go through the input object attribute by attribute
-            // and look for our shard keys
-            for (size_t i = 0; i < n->numMembers(); ++i) {
-              auto sub = n->getMember(i);
-              if (sub->type != NODE_TYPE_OBJECT_ELEMENT) {
-                continue;
-              }
-
-              auto v = sub->getMember(0);
-
-              auto it = toFind.find(sub->getString());
-              if (it != toFind.end()) {
-                // we found one of the shard keys!
-                if (v->isConstant()) {
-                  // if the attribute value is a constant, we copy it into our
-                  // builder
-                  builder.add(VPackValue(sub->getString()));
-                  v->toVelocyPackValue(builder);
-                }
-                // remove the attribute from our to-do list
-                toFind.erase(it);
-              }
-            }
-
-            builder.close();
-
-            if (toFind.empty()) {
-              // all shard keys found!!
-              auto ci = ClusterInfo::instance();
-
-              if (ci != nullptr) {
-                // find the responsible shard for the data
-                bool usedDefaultSharding;
-                int res = ci->getResponsibleShard(collection->getCollection().get(), builder.slice(), true, shardId, usedDefaultSharding);
-                if (res != TRI_ERROR_NO_ERROR) {
-                  // some error occurred. better do not use the
-                  // single shard optimization here
-                  shardId.clear();
-                }
-              }
-            }
-          }
-        }
+        shardId = getSingleShardId(plan.get(), static_cast<ModificationNode*>(node));
+        
         // if shardId is non-empty here, we will restrict the operation to a single shard
         // in this case we must not ignore that a document was not found. in case we do
         // the fan-out to all shards, we need to ignore that a document was not found on
@@ -2878,8 +2898,20 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
     }
 
     TRI_ASSERT(node != nullptr);
+
     if (node == nullptr) {
       THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
+    }
+      
+    TRI_ASSERT(node->getType() == ExecutionNode::INSERT ||
+               node->getType() == ExecutionNode::REMOVE ||
+               node->getType() == ExecutionNode::UPDATE ||
+               node->getType() == ExecutionNode::REPLACE ||
+               node->getType() == ExecutionNode::UPSERT);
+
+    if (!node->isInInnerLoop() && !getSingleShardId(plan.get(), static_cast<ModificationNode*>(node)).empty()) {
+      // no need to insert a distribute node for a single operation
+      continue;
     }
    
     ExecutionNode* originalParent = nullptr;

@@ -551,7 +551,6 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
     return nullptr;
   }
 
-  std::unique_ptr<AqlItemBlock> result;
   auto ep = static_cast<UpdateNode const*>(getPlanNode());
   auto it = ep->getRegisterPlan()->varInfo.find(ep->_inDocVariable->id);
   TRI_ASSERT(it != ep->getRegisterPlan()->varInfo.end());
@@ -559,8 +558,13 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
   RegisterId keyRegisterId = 0;  // default initialization
 
   bool const ignoreDocumentNotFound = ep->getOptions().ignoreDocumentNotFound;
-  bool const producesOutput =
-      (ep->_outVariableOld != nullptr || ep->_outVariableNew != nullptr);
+  bool producesOutput = (ep->_outVariableOld != nullptr || ep->_outVariableNew != nullptr);
+      
+  if (!producesOutput && _isDBServer && ignoreDocumentNotFound) {
+    // on a DB server, when we are told to ignore missing documents, we must
+    // set this flag in order to not assert later on
+    producesOutput = true;
+  }
 
   bool const hasKeyVariable = (ep->_inKeyVariable != nullptr);
   std::string errorMessage;
@@ -572,7 +576,7 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
     keyRegisterId = it->second.registerId;
   }
 
-  result.reset(requestBlock(count, getPlanNode()->getRegisterPlan()->nrRegs[getPlanNode()->getDepth()]));
+  std::unique_ptr<AqlItemBlock> result(requestBlock(count, getPlanNode()->getRegisterPlan()->nrRegs[getPlanNode()->getDepth()]));
 
   OperationOptions options;
   options.silent = !producesOutput;
@@ -638,6 +642,8 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
             _tempBuilder.add(StaticStrings::KeyString, VPackValue(key));
             _tempBuilder.close();
 
+            VPackCollection::merge(object, a.slice(), _tempBuilder.slice(), false, false);
+            /*
             VPackBuilder tmp = VPackCollection::merge(
                 a.slice(), _tempBuilder.slice(), false, false);
             if (isMultiple) {
@@ -645,6 +651,7 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
             } else {
               object = std::move(tmp);
             }
+            */
           }
           else {
             // use original slice for updating
@@ -675,6 +682,13 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
     OperationResult opRes = _trx->update(_collection->name, toUpdate, options); 
     if (!isMultiple) {
       int errorCode = opRes.errorNumber();
+      
+      if (errorCode == TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND && _isDBServer &&
+          ignoreDocumentNotFound) {
+        // Ignore document not found on the DBserver:
+        // do not emit a new row
+        continue;
+      }
 
       if (producesOutput && errorCode == TRI_ERROR_NO_ERROR) {
         if (ep->_outVariableOld != nullptr) {
@@ -687,12 +701,6 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
         }
       }
 
-      if (errorCode == TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND && _isDBServer &&
-          ignoreDocumentNotFound) {
-        // Ignore document not found on the DBserver:
-        errorCode = TRI_ERROR_NO_ERROR;
-      }
-            
       if (errorCode != TRI_ERROR_NO_ERROR) {
         errorMessage.assign(opRes.errorMessage());
       } else {
@@ -723,8 +731,13 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
                 // store $NEW
                 result->emplaceValue(dstRow, _outRegNew, elm.get("new"));
               }
-            }
+            } 
             ++iter;
+
+            if (wasError) {
+              // do not increase dstRow here
+              continue;
+            }
           }
           dstRow++;
         }
@@ -736,6 +749,14 @@ AqlItemBlock* UpdateBlock::work(std::vector<AqlItemBlock*>& blocks) {
     // done with block. now unlink it and return it to block manager
     (*it) = nullptr;
     returnBlock(res);
+  }
+
+  if (dstRow < result->size()) {
+    if (dstRow == 0) {
+      result.reset();
+    } else {
+      result->shrink(dstRow);
+    }
   }
 
   return result.release();
@@ -1004,7 +1025,6 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
     return nullptr;
   }
 
-  std::unique_ptr<AqlItemBlock> result;
   auto ep = static_cast<ReplaceNode const*>(getPlanNode());
   auto it = ep->getRegisterPlan()->varInfo.find(ep->_inDocVariable->id);
   TRI_ASSERT(it != ep->getRegisterPlan()->varInfo.end());
@@ -1012,8 +1032,13 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
   RegisterId keyRegisterId = 0;  // default initialization
 
   bool const ignoreDocumentNotFound = ep->getOptions().ignoreDocumentNotFound;
-  bool const producesOutput =
-      (ep->_outVariableOld != nullptr || ep->_outVariableNew != nullptr);
+  bool producesOutput = (ep->_outVariableOld != nullptr || ep->_outVariableNew != nullptr);
+  
+  if (!producesOutput && _isDBServer && ignoreDocumentNotFound) {
+    // on a DB server, when we are told to ignore missing documents, we must
+    // set this flag in order to not assert later on
+    producesOutput = true;
+  }
 
   bool const hasKeyVariable = (ep->_inKeyVariable != nullptr);
   std::string errorMessage;
@@ -1025,7 +1050,7 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
     keyRegisterId = it->second.registerId;
   }
 
-  result.reset(requestBlock(count, getPlanNode()->getRegisterPlan()->nrRegs[getPlanNode()->getDepth()]));
+  std::unique_ptr<AqlItemBlock> result(requestBlock(count, getPlanNode()->getRegisterPlan()->nrRegs[getPlanNode()->getDepth()]));
 
   OperationOptions options;
   options.silent = !producesOutput;
@@ -1090,6 +1115,9 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
             _tempBuilder.openObject();
             _tempBuilder.add(StaticStrings::KeyString, VPackValue(key));
             _tempBuilder.close();
+            
+            VPackCollection::merge(object, a.slice(), _tempBuilder.slice(), false, false);
+            /*
             VPackBuilder tmp = VPackCollection::merge(
                 a.slice(), _tempBuilder.slice(), false, false);
             if (isMultiple) {
@@ -1097,6 +1125,7 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
             } else {
               object = std::move(tmp);
             }
+            */
           } else {
             // Use the original slice for updating
             object.add(a.slice());
@@ -1125,6 +1154,13 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
     OperationResult opRes = _trx->replace(_collection->name, toUpdate, options); 
     if (!isMultiple) {
       int errorCode = opRes.errorNumber();
+      
+      if (errorCode == TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND && _isDBServer &&
+          ignoreDocumentNotFound) {
+        // Ignore document not found on the DBserver:
+        // do not emit a new row
+        continue;
+      }
 
       if (producesOutput && errorCode == TRI_ERROR_NO_ERROR) {
         if (ep->_outVariableOld != nullptr) {
@@ -1137,17 +1173,12 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
         }
       }
 
-      if (errorCode == TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND && _isDBServer &&
-          ignoreDocumentNotFound) {
-        // Ignore document not found on the DBserver:
-        errorCode = TRI_ERROR_NO_ERROR;
-      }
-            
       if (errorCode != TRI_ERROR_NO_ERROR) {
         errorMessage.assign(opRes.errorMessage());
       } else {
         errorMessage.clear();
       }
+
       handleResult(errorCode, ep->_options.ignoreErrors, &errorMessage);
       ++dstRow;
     } else {
@@ -1174,6 +1205,11 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
               }
             }
             ++iter;
+            
+            if (wasError) {
+              // do not increase dstRow here
+              continue;
+            }
           }
           dstRow++;
         }
@@ -1185,6 +1221,14 @@ AqlItemBlock* ReplaceBlock::work(std::vector<AqlItemBlock*>& blocks) {
     // done with block. now unlink it and return it to block manager
     (*it) = nullptr;
     returnBlock(res);
+  }
+  
+  if (dstRow < result->size()) {
+    if (dstRow == 0) {
+      result.reset();
+    } else {
+      result->shrink(dstRow);
+    }
   }
 
   return result.release();
