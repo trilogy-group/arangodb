@@ -48,7 +48,17 @@ var sanitizeStats = function (stats) {
 };
 
 let hasDistributeNode = function(nodes) {
-  return (nodes.filter(function(node) { return node.type === 'DistributeNode'; }).length > 0);
+  return (nodes.filter(function(node) { 
+    return node.type === 'DistributeNode'; 
+  }).length > 0);
+};
+
+let allRemoteNodesAreRestrictedToShard = function(nodes, collection) {
+  return nodes.filter(function(node) { 
+    return node.type === 'RemoteNode'; 
+  }).every(function(node) {
+    return (collection.shards().indexOf(node.ownName) !== -1);
+  });
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -84,9 +94,7 @@ function ahuacatlModifySuite () {
    
       let nodes = AQL_EXPLAIN(query).plan.nodes;
       assertFalse(hasDistributeNode(nodes));
-      let remoteNode = nodes[nodes.length - 2];
-      assertEqual("RemoteNode", remoteNode.type);
-      assertTrue(c.shards().indexOf(remoteNode.ownName) !== -1);
+      assertTrue(allRemoteNodesAreRestrictedToShard(nodes, c));
 
       assertEqual(1, c.count());
       assertEqual(0, actual.json.length);
@@ -117,9 +125,7 @@ function ahuacatlModifySuite () {
    
       let nodes = AQL_EXPLAIN(query).plan.nodes;
       assertFalse(hasDistributeNode(nodes));
-      let remoteNode = nodes[nodes.length - 2];
-      assertEqual("RemoteNode", remoteNode.type);
-      assertTrue(c.shards().indexOf(remoteNode.ownName) !== -1);
+      assertTrue(allRemoteNodesAreRestrictedToShard(nodes, c));
 
       assertEqual(1, c.count());
       assertEqual(0, actual.json.length);
@@ -275,7 +281,8 @@ function ahuacatlModifySuite () {
       let actual = getModifyQueryResultsRaw(query);
       if (isCluster) {
         let nodes = AQL_EXPLAIN(query).plan.nodes;
-        assertTrue(hasDistributeNode(nodes));
+        assertFalse(hasDistributeNode(nodes));
+        assertTrue(allRemoteNodesAreRestrictedToShard(nodes, c));
       }
     
       assertEqual(99, c.count());
@@ -295,7 +302,8 @@ function ahuacatlModifySuite () {
       let actual = getModifyQueryResultsRaw(query);
       if (isCluster) {
         let nodes = AQL_EXPLAIN(query).plan.nodes;
-        assertTrue(hasDistributeNode(nodes));
+        assertFalse(hasDistributeNode(nodes));
+        assertTrue(allRemoteNodesAreRestrictedToShard(nodes, c));
       }
     
       assertEqual(99, c.count());
@@ -712,17 +720,6 @@ function ahuacatlModifySuite () {
     },
    
     // use custom shard key 
-    
-    testInsertMainLevelCustomShardKey : function () {
-      let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});
-
-      let expected = { writesExecuted: 100, writesIgnored: 0 };
-      let actual = getModifyQueryResultsRaw("FOR i IN 1..100 INSERT { id: i, value: i } IN " + cn);
-    
-      assertEqual(100, c.count());
-      assertEqual(0, actual.json.length);
-      assertEqual(expected, sanitizeStats(actual.stats));
-    },
     
     testInsertMainLevelCustomShardKeyWithReturn : function () {
       let c = db._create(cn, {numberOfShards:5, shardKeys: ["id"]});

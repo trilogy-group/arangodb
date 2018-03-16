@@ -96,16 +96,23 @@ static aql::Variable const* getVariable(ExecutionNode const* node) {
   THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "node type does not have an out variable");
 }
 
-std::string getSingleShardId(ExecutionPlan const* plan, ModificationNode const* node) {
-  auto collection = node->collection();
-        
+std::string getSingleShardId(ExecutionPlan const* plan, ExecutionNode const* node, aql::Collection const* collection) {
+  if (collection->isSmart()) {
+    // no support for smart graphs yet
+    return std::string();
+  }
+
   std::vector<Variable const*> v = node->getVariablesUsedHere();
   Variable const* inputVariable;
-  if (v.size() > 1) {
-    // If there is a key variable:
-    inputVariable = v[1];
+  if (node->getType() == EN::INDEX) {
+    inputVariable = node->getVariablesSetHere()[0];
   } else {
-    inputVariable = v[0];
+    if (v.size() > 1) {
+      // If there is a key variable:
+      inputVariable = v[1];
+    } else {
+      inputVariable = v[0];
+    }
   }
         
   // check if we can easily find out the setter of the input variable
@@ -113,25 +120,11 @@ std::string getSingleShardId(ExecutionPlan const* plan, ModificationNode const* 
   // up the shard key attribute values)
   auto setter = plan->getVarSetBy(inputVariable->id);
 
-  if (setter == nullptr || setter->getType() != ExecutionNode::CALCULATION) {
-    // so far we can only handle calculation nodes here
+  if (setter == nullptr) {
+    // oops!
     return std::string();
   }
-
-  CalculationNode const* c = static_cast<CalculationNode const*>(setter);
-  auto ex = c->expression();
-
-  if (ex == nullptr) {
-    return std::string();
-  }
-
-  auto n = ex->node();
-  if (n == nullptr || !n->isObject()) {
-    return std::string();
-  }
-      
-  // TODO: handle string key input if shard key is _key
-
+    
   // note for which shard keys we need to look for
   auto shardKeys = collection->shardKeys();
   std::unordered_set<std::string> toFind;
@@ -141,29 +134,124 @@ std::string getSingleShardId(ExecutionPlan const* plan, ModificationNode const* 
       
   VPackBuilder builder;
   builder.openObject();
-      
-  // go through the input object attribute by attribute
-  // and look for our shard keys
-  for (size_t i = 0; i < n->numMembers(); ++i) {
-    auto sub = n->getMember(i);
+ 
+  if (setter->getType() == ExecutionNode::CALCULATION) {
+    CalculationNode const* c = static_cast<CalculationNode const*>(setter);
+    auto ex = c->expression();
 
-    if (sub->type != NODE_TYPE_OBJECT_ELEMENT) {
-      continue;
+    if (ex == nullptr) {
+      return std::string();
     }
 
-    auto it = toFind.find(sub->getString());
-
-    if (it != toFind.end()) {
-      // we found one of the shard keys!
-      auto v = sub->getMember(0);
-      if (v->isConstant()) {
-        // if the attribute value is a constant, we copy it into our
-        // builder
-        builder.add(VPackValue(sub->getString()));
-        v->toVelocyPackValue(builder);
+    auto n = ex->node();
+    if (n == nullptr) {
+      return std::string();
+    }
+  
+    if (n->isStringValue()) {
+      if (!n->isConstant() ||
+          toFind.size() != 1 ||
+          toFind.find(StaticStrings::KeyString) == toFind.end()) {
+        return std::string();
       }
-      // remove the attribute from our to-do list
-      toFind.erase(it);
+
+      // the lookup value is a string, and the only shard key is _key: so we can use it
+      builder.add(VPackValue(StaticStrings::KeyString));
+      n->toVelocyPackValue(builder);
+      toFind.clear();
+    } else if (n->isObject()) {
+      // go through the input object attribute by attribute
+      // and look for our shard keys
+      for (size_t i = 0; i < n->numMembers(); ++i) {
+        auto sub = n->getMember(i);
+
+        if (sub->type != NODE_TYPE_OBJECT_ELEMENT) {
+          continue;
+        }
+
+        auto it = toFind.find(sub->getString());
+
+        if (it != toFind.end()) {
+          // we found one of the shard keys!
+          auto v = sub->getMember(0);
+          if (v->isConstant()) {
+            // if the attribute value is a constant, we copy it into our
+            // builder
+            builder.add(VPackValue(sub->getString()));
+            v->toVelocyPackValue(builder);
+          }
+          // remove the attribute from our to-do list
+          toFind.erase(it);
+        }
+      }
+    } else {
+      return std::string();
+    }
+  } else if (setter->getType() == ExecutionNode::INDEX) {
+    IndexNode const* c = static_cast<IndexNode const*>(setter);
+    
+    if (c->getIndexes().size() != 1) {
+      // we can only handle a single index here
+      return std::string();
+    }
+    auto const* condition = c->condition();
+    
+    if (condition == nullptr) {
+      return std::string();
+    }
+
+    AstNode const* root = condition->root();
+  
+    if (root == nullptr || 
+        root->type != NODE_TYPE_OPERATOR_NARY_OR ||
+        root->numMembers() != 1) {
+      return std::string();
+    }
+
+    root = root->getMember(0);
+      
+    if (root == nullptr || root->type != NODE_TYPE_OPERATOR_NARY_AND) {
+      return std::string();
+    }
+            
+    std::string result;
+
+    for (size_t i = 0; i < root->numMembers(); ++i) {
+      if (root->getMember(i) != nullptr && 
+          root->getMember(i)->type == NODE_TYPE_OPERATOR_BINARY_EQ) {
+
+        AstNode const* value = nullptr;
+        std::pair<Variable const*, std::vector<arangodb::basics::AttributeName>> pair;
+          
+        auto eq = root->getMember(i);
+        auto lhs = eq->getMember(0);
+        auto rhs = eq->getMember(1);
+        result.clear();
+
+        if (lhs->isAttributeAccessForVariable(pair, false) && 
+            pair.first == inputVariable && 
+            rhs->isConstant()) {
+          TRI_AttributeNamesToString(pair.second, result, true);
+          value = rhs;
+        } else if (rhs->isAttributeAccessForVariable(pair, false) &&
+            pair.first == inputVariable &&
+            lhs->isConstant()) {
+          TRI_AttributeNamesToString(pair.second, result, true);
+          value = lhs;
+        }
+
+        if (value != nullptr) {
+          TRI_ASSERT(!result.empty());
+          auto it = toFind.find(result);
+
+          if (it != toFind.end()) {
+            builder.add(VPackValue(result));
+            value->toVelocyPackValue(builder);
+
+            toFind.erase(it);
+          }
+        }
+      }
     }
   }
 
@@ -2774,8 +2862,7 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
   plan->findNodesOfType(subs, ExecutionNode::SUBQUERY, true);
 
   for (auto& it : subs) {
-    subqueries.emplace(static_cast<SubqueryNode const*>(it)->getSubquery(),
-                        it);
+    subqueries.emplace(static_cast<SubqueryNode const*>(it)->getSubquery(), it);
   }
 
   // we are a coordinator. now look in the plan for nodes of type
@@ -2827,12 +2914,13 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
     SortElementVector elements;
 
     if (nodeType == ExecutionNode::ENUMERATE_COLLECTION) {
-      vocbase = static_cast<EnumerateCollectionNode*>(node)->vocbase();
-      collection = static_cast<EnumerateCollectionNode*>(node)->collection();
+      vocbase = static_cast<EnumerateCollectionNode const*>(node)->vocbase();
+      collection = static_cast<EnumerateCollectionNode const*>(node)->collection();
     } else if (nodeType == ExecutionNode::INDEX) {
-      auto idxNode = static_cast<IndexNode*>(node);
+      auto idxNode = static_cast<IndexNode const*>(node);
       vocbase = idxNode->vocbase();
       collection = idxNode->collection();
+      TRI_ASSERT(collection != nullptr);
       auto outVars = idxNode->getVariablesSetHere();
       TRI_ASSERT(outVars.size() == 1);
       Variable const* sortVariable = outVars[0];
@@ -2853,6 +2941,8 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
           }
         }
       }
+        
+      shardId = getSingleShardId(plan.get(), node, collection);
     } else if (nodeType == ExecutionNode::INSERT ||
                nodeType == ExecutionNode::UPDATE ||
                nodeType == ExecutionNode::REPLACE ||
@@ -2867,7 +2957,7 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
         // Note that in the UPSERT case we are not getting here,
         // since the distributeInClusterRule fires and a DistributionNode is used.
 
-        shardId = getSingleShardId(plan.get(), static_cast<ModificationNode*>(node));
+        shardId = getSingleShardId(plan.get(), node, collection);
         // if shardId is non-empty here, we will restrict the operation to a single shard
         // in this case we must not ignore that a document was not found. in case we do
         // the fan-out to all shards, we need to ignore that a document was not found on
@@ -3012,11 +3102,12 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
                node->getType() == ExecutionNode::REPLACE ||
                node->getType() == ExecutionNode::UPSERT);
 
-    if (!node->isInInnerLoop() && !getSingleShardId(plan.get(), static_cast<ModificationNode*>(node)).empty()) {
-      // no need to insert a distribute node for a single operation
+    if (!node->isInInnerLoop() && 
+        !getSingleShardId(plan.get(), node, static_cast<ModificationNode const*>(node)->collection()).empty()) {
+      // no need to insert a DistributeNode for a single operation that is restricted to a single shard
       continue;
     }
-   
+
     ExecutionNode* originalParent = nullptr;
     if (node->hasParent()) {
       auto const& parents = node->getParents();
@@ -3465,7 +3556,7 @@ class RemoveToEnumCollFinder final : public WalkerWorker<ExecutionNode> {
   bool _remove;
   bool _scatter;
   bool _gather;
-  EnumerateCollectionNode* _enumColl;
+  ExecutionNode* _enumColl;
   ExecutionNode* _setter;
   const Variable* _variable;
   ExecutionNode* _lastNode;
@@ -3529,13 +3620,14 @@ class RemoveToEnumCollFinder final : public WalkerWorker<ExecutionNode> {
           TRI_ASSERT(_setter != nullptr);
         }
 
-        if (enumColl->getType() != EN::ENUMERATE_COLLECTION) {
+        if (enumColl->getType() != EN::ENUMERATE_COLLECTION && 
+            enumColl->getType() != EN::INDEX) {
           break;  // abort . . .
         }
 
-        _enumColl = static_cast<EnumerateCollectionNode*>(enumColl);
+        _enumColl = enumColl;
 
-        if (_enumColl->collection() != rn->collection()) {
+        if (getCollection(_enumColl) != rn->collection()) {
           break;  // abort . . .
         }
 
@@ -3605,7 +3697,8 @@ class RemoveToEnumCollFinder final : public WalkerWorker<ExecutionNode> {
         _lastNode = en;
         return false;  // continue . . .
       }
-      case EN::ENUMERATE_COLLECTION: {
+      case EN::ENUMERATE_COLLECTION: 
+      case EN::INDEX: {
         // check that we are enumerating the variable we are to remove
         // and that we have already seen a remove node
         TRI_ASSERT(_enumColl != nullptr);
@@ -3630,8 +3723,7 @@ class RemoveToEnumCollFinder final : public WalkerWorker<ExecutionNode> {
       case EN::LIMIT:
       case EN::SORT:
       case EN::TRAVERSAL:
-      case EN::SHORTEST_PATH:
-      case EN::INDEX: {
+      case EN::SHORTEST_PATH: {
         // if we meet any of the above, then we abort . . .
       }
     }
@@ -5061,7 +5153,7 @@ GeoIndexInfo geoDistanceFunctionArgCheck(std::pair<AstNode const*, AstNode const
   // document in order to see which collection is bound to it and if that
   // collections supports geo-index
 
-  if (!pair.first->isAttributeAccessForVariable(attributeAccess1,true) ||
+  if (!pair.first->isAttributeAccessForVariable(attributeAccess1, true) ||
       !pair.second->isAttributeAccessForVariable(attributeAccess2, true)) {
     info.invalidate();
     return info;
