@@ -461,6 +461,13 @@ The following optimizer rules may appear in the `rules` attribute of a plan:
 
 The following optimizer rules may appear in the `rules` attribute of cluster plans:
 
+* `restrict-to-single-shard`: will appear if an optimization could be made to restrict
+  an operation to a single-shard. This normally happens if the optimizer can reliably 
+  prove that the operation will only touch a single shard and can be achieved by providing
+  the shard key values for the operation as fixed values or bind parameters inside the
+  query.
+  the same query part that enumerates over the documents of a collection. This saves
+  inter-cluster roundtrips between the EnumerateCollectionNode and the RemoveNode.
 * `distribute-in-cluster`: will appear when query parts get distributed in a cluster.
   This is not an optimization rule, and it cannot be turned off.
 * `scatter-in-cluster`: will appear when scatter, gather, and remote nodes are inserted

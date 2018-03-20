@@ -285,6 +285,10 @@ void OptimizerRulesFeature::addRules() {
     registerRule("undistribute-remove-after-enum-coll",
                  undistributeRemoveAfterEnumCollRule,
                  OptimizerRule::undistributeRemoveAfterEnumCollRule_pass10, DoesNotCreateAdditionalPlans, CanBeDisabled);
+    
+    registerRule("restrict-to-single-shard",
+                 restrictToSingleShardRule,
+                 OptimizerRule::restrictToSingleShardRule_pass10, DoesNotCreateAdditionalPlans, CanBeDisabled);
 
 #ifdef USE_ENTERPRISE
     registerRule("remove-satellite-joins",

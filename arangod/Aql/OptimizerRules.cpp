@@ -102,11 +102,18 @@ std::string getSingleShardId(ExecutionPlan const* plan, ExecutionNode const* nod
     return std::string();
   }
 
-  std::vector<Variable const*> v = node->getVariablesUsedHere();
-  Variable const* inputVariable;
+  TRI_ASSERT(node->getType() == EN::INDEX ||
+             node->getType() == EN::INSERT ||
+             node->getType() == EN::UPDATE ||
+             node->getType() == EN::REPLACE ||
+             node->getType() == EN::REMOVE);
+
+  Variable const* inputVariable = nullptr;
+
   if (node->getType() == EN::INDEX) {
     inputVariable = node->getVariablesSetHere()[0];
   } else {
+    std::vector<Variable const*> v = node->getVariablesUsedHere();
     if (v.size() > 1) {
       // If there is a key variable:
       inputVariable = v[1];
@@ -2907,10 +2914,6 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
     // extract database and collection from plan node
     TRI_vocbase_t* vocbase = nullptr;
     Collection const* collection = nullptr;
-    // single shard id - kept empty if the operation cannot safely be restricted to 
-    // a single shard
-    std::string shardId;
-
     SortElementVector elements;
 
     if (nodeType == ExecutionNode::ENUMERATE_COLLECTION) {
@@ -2942,7 +2945,6 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
         }
       }
         
-      shardId = getSingleShardId(plan.get(), node, collection);
     } else if (nodeType == ExecutionNode::INSERT ||
                nodeType == ExecutionNode::UPDATE ||
                nodeType == ExecutionNode::REPLACE ||
@@ -2950,22 +2952,14 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
                nodeType == ExecutionNode::UPSERT) {
       vocbase = static_cast<ModificationNode*>(node)->vocbase();
       collection = static_cast<ModificationNode*>(node)->collection();
-      if (nodeType == ExecutionNode::INSERT ||
-          nodeType == ExecutionNode::REMOVE ||
-          nodeType == ExecutionNode::UPDATE ||
-          nodeType == ExecutionNode::REPLACE) {
-        // Note that in the UPSERT case we are not getting here,
-        // since the distributeInClusterRule fires and a DistributionNode is used.
-
-        shardId = getSingleShardId(plan.get(), node, collection);
-        // if shardId is non-empty here, we will restrict the operation to a single shard
-        // in this case we must not ignore that a document was not found. in case we do
-        // the fan-out to all shards, we need to ignore that a document was not found on
-        // some of the shards
-        if (shardId.empty()) {  
-          auto* modNode = static_cast<ModificationNode*>(node);
-          modNode->getOptions().ignoreDocumentNotFound = true;
-        }
+      
+      if (nodeType == ExecutionNode::REMOVE ||
+          nodeType == ExecutionNode::UPDATE) {
+        // Note that in the REPLACE or UPSERT case we are not getting here,
+        // since the distributeInClusterRule fires and a DistributionNode is
+        // used.
+        auto* modNode = static_cast<ModificationNode*>(node);
+        modNode->getOptions().ignoreDocumentNotFound = true;
       }
     } else {
       TRI_ASSERT(false);
@@ -2980,7 +2974,7 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
 
     // insert a remote node
     ExecutionNode* remoteNode = new RemoteNode(
-        plan.get(), plan->nextId(), vocbase, collection, "", shardId, "");
+        plan.get(), plan->nextId(), vocbase, collection, "", "", "");
     plan->registerNode(remoteNode);
     TRI_ASSERT(scatterNode);
     remoteNode->addDependency(scatterNode);
@@ -2990,7 +2984,7 @@ void arangodb::aql::scatterInClusterRule(Optimizer* opt,
 
     // insert another remote node
     remoteNode = new RemoteNode(plan.get(), plan->nextId(), vocbase,
-                                collection, "", shardId, "");
+                                collection, "", "", "");
     plan->registerNode(remoteNode);
     TRI_ASSERT(node);
     remoteNode->addDependency(node);
@@ -3096,18 +3090,12 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
       THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
     }
 
-    TRI_ASSERT(node->getType() == ExecutionNode::INSERT ||
-               node->getType() == ExecutionNode::REMOVE ||
-               node->getType() == ExecutionNode::UPDATE ||
-               node->getType() == ExecutionNode::REPLACE ||
-               node->getType() == ExecutionNode::UPSERT);
-
     if (!node->isInInnerLoop() && 
         !getSingleShardId(plan.get(), node, static_cast<ModificationNode const*>(node)->collection()).empty()) {
       // no need to insert a DistributeNode for a single operation that is restricted to a single shard
       continue;
     }
-
+    
     ExecutionNode* originalParent = nullptr;
     if (node->hasParent()) {
       auto const& parents = node->getParents();
@@ -3547,6 +3535,73 @@ void arangodb::aql::removeUnnecessaryRemoteScatterRule(
   }
 
   opt->addPlan(std::move(plan), rule, !toUnlink.empty());
+}
+
+/// @brief try to restrict fragments to a single shard if possible
+void arangodb::aql::restrictToSingleShardRule(
+    Optimizer* opt, std::unique_ptr<ExecutionPlan> plan,
+    OptimizerRule const* rule) {
+  TRI_ASSERT(arangodb::ServerState::instance()->isCoordinator());
+  bool wasModified = false;
+  
+  SmallVector<ExecutionNode*>::allocator_type::arena_type a;
+  SmallVector<ExecutionNode*> nodes{a};
+  plan->findNodesOfType(nodes, EN::REMOTE, true);
+
+  for (auto& node : nodes) {
+    TRI_ASSERT(node->getType() == ExecutionNode::REMOTE);
+    ExecutionNode* current = node->getFirstDependency();
+
+    while (current != nullptr) {
+      auto const currentType = current->getType();
+      
+      // don't do this if we are already distributing!
+      auto deps = current->getDependencies();
+      if (deps.size() &&
+          deps[0]->getType() == ExecutionNode::REMOTE &&
+          deps[0]->hasDependency() &&
+          deps[0]->getFirstDependency()->getType() == ExecutionNode::DISTRIBUTE) {
+        break;
+      }
+
+      if (currentType == ExecutionNode::INSERT ||
+          currentType == ExecutionNode::UPDATE ||
+          currentType == ExecutionNode::REPLACE ||
+          currentType == ExecutionNode::REMOVE) {
+        auto collection = static_cast<ModificationNode const*>(current)->collection();
+        
+        std::string shardId = getSingleShardId(plan.get(), current, collection);
+        if (!shardId.empty()) {
+          wasModified = true;
+          static_cast<RemoteNode*>(node)->ownName(shardId);
+          // we are on a single shard. we must not ignore not-found documents now
+          auto* modNode = static_cast<ModificationNode*>(current);
+          modNode->getOptions().ignoreDocumentNotFound = false;
+        }
+        break;
+      } else if (currentType == ExecutionNode::INDEX) {
+        auto collection = static_cast<IndexNode const*>(current)->collection();
+        
+        std::string shardId = getSingleShardId(plan.get(), current, collection);
+        if (!shardId.empty()) {
+          wasModified = true;
+          static_cast<RemoteNode*>(node)->ownName(shardId);
+        }
+        break;
+      } else if (currentType == ExecutionNode::UPSERT ||
+                 currentType == ExecutionNode::REMOTE ||
+                 currentType == ExecutionNode::DISTRIBUTE ||
+                 currentType == ExecutionNode::SINGLETON) {
+        // we reached a new snippet or the end of the plan - we can abort searching now
+        // additionally, we cannot yet handle UPSERT well
+        break;
+      }
+      
+      current = current->getFirstDependency();
+    }
+  }
+
+  opt->addPlan(std::move(plan), rule, wasModified); 
 }
 
 /// WalkerWorker for undistributeRemoveAfterEnumColl
