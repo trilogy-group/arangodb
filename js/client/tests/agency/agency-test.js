@@ -1024,8 +1024,14 @@ function agencyTestSuite () {
 ////////////////////////////////////////////////////////////////////////////////
 
     testTransactionDifferentKeys : function() {
-      writeAndCheck([[{"a":{"op":"delete"}}]]); // cleanup first
-      var huge = [], i;
+      let huge = [];
+      let i;
+
+      // cleanup first
+      for (i = 0; i < 100; ++i) {
+        writeAndCheck([[{["a" + i]:{"op":"delete"}}]]);
+      }
+
       for (i = 0; i < 100; ++i) {
         huge.push([{["a" + i]:{"op":"increment"}}]);
       }
