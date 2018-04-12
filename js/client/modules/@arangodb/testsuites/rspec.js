@@ -201,7 +201,7 @@ function rubyTests (options, ssl) {
                 '--out', resultfn,
                 '--require', tmpname,
                 tfn
-               ];
+               ]);
 
         if (rspec !== undefined) {
           args = [rspec].concat(args);
