@@ -189,8 +189,13 @@ function rubyTests (options, ssl) {
         const subFolder = ssl ? 'ssl_server' : 'http_server';
         const resultfn = fs.join(options.testOutputDirectory, subFolder, te + '.json');
 
-        args = ['--color',
-                '-I', fs.join('UnitTests', 'HttpInterface'),
+        if (platform.substr(0, 3) !== 'win') {
+          args = ['--color'];
+        } else {
+          args = [];
+        }
+        args = args.concat(
+               ['-I', fs.join('UnitTests', 'HttpInterface'),
                 '--format', 'd',
                 '--format', 'j',
                 '--out', resultfn,
