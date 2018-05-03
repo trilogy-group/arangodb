@@ -151,10 +151,10 @@ public:
                       std::is_pointer<T>::value
            , typename std::enable_if<x,int>::type = 0
            >
-  ResultValue( ValueType value
+  ResultValue( ValueType val
              , Result const& res = {}
              )
-    : value(value)
+    : value(val)
     , _valid(true)
     , _result(res)
     {
@@ -167,10 +167,10 @@ public:
                       std::is_pointer<T>::value
            , typename std::enable_if<x,int>::type = 0
            >
-  ResultValue( ValueType value
+  ResultValue( ValueType val
              , Result&& res
              )
-    : value(value)
+    : value(val)
     , _valid(true)
     , _result(std::move(res))
     {
@@ -186,10 +186,10 @@ public:
                      !std::is_pointer<T>::value
            , typename std::enable_if<x,int>::type = 0
            >
-  ResultValue( ValueType const& value
+  ResultValue( ValueType const& val
              , Result const& res = {}
              )
-    : value(value) //copy here
+    : value(val) //copy here
     , _valid(true)
     , _result(res)
     {
@@ -202,10 +202,10 @@ public:
                      !std::is_pointer<T>::value
            , typename std::enable_if<x,int>::type = 0
            >
-  ResultValue( ValueType const& value
+  ResultValue( ValueType const& val
              , Result&& res
              )
-    : value(value) //copy here
+    : value(val) //copy here
     , _valid(true)
     , _result(std::move(res))
     {
@@ -222,10 +222,10 @@ public:
                                 std::is_move_constructible<T>::value
            , typename std::enable_if<x,int>::type = 0
            >
-  ResultValue( ValueType&& value
+  ResultValue( ValueType&& val
              , Result const& res = {}
              )
-    : value(std::move(value))
+    : value(std::move(val))
     , _valid(true)
     , _result(res)
     {
@@ -239,10 +239,10 @@ public:
                                 std::is_move_constructible<T>::value
            , typename std::enable_if<x,int>::type = 0
            >
-  ResultValue( ValueType&& value
+  ResultValue( ValueType&& val
              , Result && res
              )
-    : value(std::move(value))
+    : value(std::move(val))
     , _valid(true)
     , _result(std::move(res))
     {
@@ -267,7 +267,7 @@ public:
     , _valid(true)
     , _result(res)
     {
-      this->value = std::move(value);
+      value = std::move(val);
 #ifdef RESULT_DEBUG
       std::cerr << "ctor: rvalue (move assign) - 0 copy" << std::endl;
 #endif
@@ -286,7 +286,7 @@ public:
     , _valid(true)
     , _result(std::move(res))
     {
-      this->value = std::move(value);
+      value = std::move(val);
 #ifdef RESULT_DEBUG
       std::cerr << "ctor: rvalue (move assign) - 0 copy" << std::endl;
 #endif
@@ -319,7 +319,7 @@ public:
   Result& getResult() const &  { return _result; }           // get only on lvalues
 
   // check if we have valid result value - this is not mandatory
-  // it allows us to use values instead of pointers if an optional result is required
+  // it allows us to use value semantic instead of pointers if an optional value is required
   bool vaild(){ return _valid; }
   bool vaild(bool val){ _valid = val; return _valid; }
 
