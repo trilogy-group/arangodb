@@ -53,18 +53,7 @@ typedef std::function<AqlValue(arangodb::aql::Query*, transaction::Methods*,
 struct Functions {
 
  public:
-    static AqlValue AddOrSubtractUnitFromTimestamp(arangodb::aql::Query* query,
-                                                   tp_sys_clock_ms const& tp,
-                                                   arangodb::velocypack::Slice durationUnits,
-                                                   arangodb::velocypack::Slice durationType,
-                                                   bool isSubtract);
-
-    static AqlValue AddOrSubtractIsoDurationFromTimestamp(arangodb::aql::Query* query,
-                                                          tp_sys_clock_ms const& tp,
-                                                          std::string const& duration,
-                                                          bool isSubtract);
-
-  /// @brief validate the number of parameters
+   /// @brief validate the number of parameters
    static void ValidateParameters(VPackFunctionParameters const& parameters,
                                   char const* function, int minParams,
                                   int maxParams);
@@ -297,8 +286,12 @@ struct Functions {
                           VPackFunctionParameters const&);
     static AqlValue UnsetRecursive(arangodb::aql::Query*, transaction::Methods*,
                                    VPackFunctionParameters const&);
+    static AqlValue UnsetRegex(arangodb::aql::Query*, transaction::Methods*,
+                               VPackFunctionParameters const&);
     static AqlValue Keep(arangodb::aql::Query*, transaction::Methods*,
                          VPackFunctionParameters const&);
+    static AqlValue KeepRegex(arangodb::aql::Query*, transaction::Methods*,
+                              VPackFunctionParameters const&);
     static AqlValue Translate(arangodb::aql::Query*, transaction::Methods*,
                               VPackFunctionParameters const&);
     static AqlValue Merge(arangodb::aql::Query*, transaction::Methods*,

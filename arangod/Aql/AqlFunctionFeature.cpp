@@ -285,7 +285,9 @@ void AqlFunctionFeature::addDocumentFunctions() {
   add({"MATCHES", ".,.|.", true, false, true, &Functions::Matches});
   add({"UNSET", ".,.|+", true, false, true, &Functions::Unset});
   add({"UNSET_RECURSIVE", ".,.|+", true, false, true, &Functions::UnsetRecursive});
+  add({"UNSET_REGEX", ".,.|.", true, false, true, &Functions::UnsetRegex});
   add({"KEEP", ".,.|+", true, false, true, &Functions::Keep});
+  add({"KEEP_REGEX", ".,.|.", true, false, true, &Functions::KeepRegex});
   add({"TRANSLATE", ".,.|.", true, false, true, &Functions::Translate});
   add({"ZIP", ".,.", true, false, true, &Functions::Zip});
   add({"JSON_STRINGIFY", ".", true, false, true, &Functions::JsonStringify});
