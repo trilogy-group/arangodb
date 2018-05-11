@@ -697,7 +697,6 @@ RestStatus RestAqlHandler::execute() {
   // extract the sub-request type
   rest::RequestType type = _request->requestType();
 
-LOG_TOPIC(ERR, Logger::FIXME) << "GOT INCOMING REQUEST FOR " << suffixes;
   // execute one of the CRUD methods
   switch (type) {
     case rest::RequestType::POST: {
@@ -943,15 +942,21 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
         auto pos =
             VelocyPackHelper::getNumericValue<size_t>(querySlice, "pos", 0);
         std::unique_ptr<AqlItemBlock> items;
-        int res;
+        int res = TRI_ERROR_NO_ERROR;
         try {
-          if (VelocyPackHelper::getBooleanValue(querySlice, "exhausted",
-                                                true)) {
-            res = query->engine()->initializeCursor(nullptr, 0);
-          } else {
-            items.reset(new AqlItemBlock(query->resourceMonitor(),
-                                         querySlice.get("items")));
-            res = query->engine()->initializeCursor(items.get(), pos);
+          if (VelocyPackHelper::getBooleanValue(querySlice, "initialize", false)) {
+            res = query->engine()->initialize();
+          }
+
+          if (res == TRI_ERROR_NO_ERROR) {
+            if (VelocyPackHelper::getBooleanValue(querySlice, "exhausted",
+                                                  true)) {
+              res = query->engine()->initializeCursor(nullptr, 0);
+            } else {
+              items.reset(new AqlItemBlock(query->resourceMonitor(),
+                                          querySlice.get("items")));
+              res = query->engine()->initializeCursor(items.get(), pos);
+            }
           }
         } catch (arangodb::basics::Exception const& ex) {
           generateError(rest::ResponseCode::SERVER_ERROR, ex.code(), std::string("initializeCursor lead to an exception: ") + ex.what());
