@@ -4419,7 +4419,6 @@ AqlValue Functions::IsInPolygon(arangodb::aql::Query* query,
   AqlValue p2 = ExtractFunctionParameterValue(parameters, 1);
   AqlValue p3 = ExtractFunctionParameterValue(parameters, 2);
 
-  LOG_TOPIC(WARN, Logger::QUERIES) << "IS_IN_POLYGON is deprecated use GEO_CONTAINS";
   if (!coords.isArray()) {
     RegisterWarning(query, "IS_IN_POLYGON", TRI_ERROR_QUERY_ARRAY_EXPECTED);
     return AqlValue(AqlValueHintNull());
