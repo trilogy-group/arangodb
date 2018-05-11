@@ -697,6 +697,7 @@ RestStatus RestAqlHandler::execute() {
   // extract the sub-request type
   rest::RequestType type = _request->requestType();
 
+LOG_TOPIC(ERR, Logger::FIXME) << "GOT INCOMING REQUEST FOR " << suffixes;
   // execute one of the CRUD methods
   switch (type) {
     case rest::RequestType::POST: {

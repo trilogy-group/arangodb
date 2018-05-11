@@ -64,7 +64,7 @@ class GatherBlock : public ExecutionBlock {
   ~GatherBlock();
 
   /// @brief initialize
-  int initialize() override;
+  int initialize() override final;
 
   /// @brief shutdown: need our own method since our _buffer is different
   int shutdown(int) override final;
