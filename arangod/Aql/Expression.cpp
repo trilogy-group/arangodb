@@ -1612,10 +1612,10 @@ AqlValue Expression::executeSimpleExpressionIterator(
 AqlValue Expression::executeSimpleExpressionArithmetic(
     AstNode const* node, transaction::Methods* trx, bool& mustDestroy) {
 
-  AqlValue lhs = executeSimpleExpression(node->getMemberUnchecked(0), trx, mustDestroy, true);
+  AqlValue lhs = executeSimpleExpression(node->getMemberUnchecked(0), trx, mustDestroy, false);
   AqlValueGuard guardLhs(lhs, mustDestroy);
 
-  AqlValue rhs = executeSimpleExpression(node->getMemberUnchecked(1), trx, mustDestroy, true);
+  AqlValue rhs = executeSimpleExpression(node->getMemberUnchecked(1), trx, mustDestroy, false);
   AqlValueGuard guardRhs(rhs, mustDestroy);
 
   mustDestroy = false;
