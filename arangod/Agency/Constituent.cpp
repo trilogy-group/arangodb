@@ -65,7 +65,7 @@ void Constituent::configure(Agent* agent) {
     _role = LEADER;
     LOG_TOPIC(INFO, Logger::AGENCY) << "Set _role to LEADER in term " << _term;
   }
-  
+
 }
 
 // Default ctor
@@ -127,16 +127,16 @@ void Constituent::termNoLock(term_t t, std::string const& votedFor) {
     TRI_ASSERT(_vocbase != nullptr);
     auto ctx = transaction::StandaloneContext::Create(_vocbase);
     SingleCollectionTransaction trx(ctx, "election", AccessMode::Type::WRITE);
-    
+
     Result res = trx.begin();
     if (!res.ok()) {
       THROW_ARANGO_EXCEPTION(res);
     }
-    
+
     OperationOptions options;
     options.waitForSync = _agent->config().waitForSync();
     options.silent = true;
-    
+
     OperationResult result;
     if (tmp != t) {
       try {
@@ -223,7 +223,7 @@ void Constituent::followNoLock(term_t t, std::string const& votedFor) {
     LOG_TOPIC(INFO, Logger::AGENCY)
       << _id << ": following '" << _leaderID << "' in term " << _term;
   }
-  
+
   CONDITION_LOCKER(guard, _cv);
   _cv.signal();
 }
@@ -334,7 +334,7 @@ bool Constituent::checkLeader(
   _lastHeartbeatSeen = TRI_microtime();
   LOG_TOPIC(TRACE, Logger::AGENCY)
     << "setting last heartbeat: " << _lastHeartbeatSeen;
-  
+
   if (term > _term) {
     _agent->endPrepareLeadership();
     followNoLock(term, NO_LEADER);
@@ -344,7 +344,7 @@ bool Constituent::checkLeader(
       !logMatches(prevLogIndex, prevLogTerm)) {
     return false;
   }
-  
+
   if (_leaderID != id) {
     LOG_TOPIC(DEBUG, Logger::AGENCY)
       << "Set _leaderID to '" << id << "' in term " << _term;
@@ -361,7 +361,7 @@ bool Constituent::checkLeader(
       followNoLock(0);  // do not adjust _term or _votedFor
     }
   }
-  
+
   return true;
 }
 
@@ -370,14 +370,15 @@ bool Constituent::vote(term_t termOfPeer, std::string const& id, index_t prevLog
                        term_t prevLogTerm) {
 
   if (!_agent->ready()) {
+    LOG_TOPIC(INFO, Logger::AGENCY) << "vote():  not ready";
     return false;
   }
-  
+
   TRI_ASSERT(_vocbase != nullptr);
- 
+
   MUTEX_LOCKER(guard, _termVoteLock);
-  
-  LOG_TOPIC(TRACE, Logger::AGENCY)
+
+  LOG_TOPIC(INFO, Logger::AGENCY)
     << "vote(termOfPeer: " << termOfPeer << ", leaderId: " << id
     << ", prev-log-index: " << prevLogIndex << ", prev-log-term: " << prevLogTerm
     << ") in (my) term " << _term;
@@ -391,7 +392,7 @@ bool Constituent::vote(term_t termOfPeer, std::string const& id, index_t prevLog
     _agent->endPrepareLeadership();
   } else if (termOfPeer < _term) {
     // termOfPeer < _term, simply ignore and do not vote:
-    LOG_TOPIC(DEBUG, Logger::AGENCY)
+    LOG_TOPIC(INFO, Logger::AGENCY)
       << "ignoring RequestVoteRPC with old term " << termOfPeer
       << ", we are already at term " << _term;
     return false;
@@ -399,10 +400,10 @@ bool Constituent::vote(term_t termOfPeer, std::string const& id, index_t prevLog
 
   if (_votedFor != NO_LEADER) {   // already voted in this term
     if (_votedFor == id) {
-      LOG_TOPIC(DEBUG, Logger::AGENCY) << "repeating vote for " << id;
+      LOG_TOPIC(INFO, Logger::AGENCY) << "repeating vote for " << id;
       return true;
     }
-    LOG_TOPIC(DEBUG, Logger::AGENCY) << "not voting for " << id
+    LOG_TOPIC(INFO, Logger::AGENCY) << "not voting for " << id
       << " since we have already voted for " << _votedFor
       << " in this term";
     return false;
@@ -415,12 +416,12 @@ bool Constituent::vote(term_t termOfPeer, std::string const& id, index_t prevLog
   if (prevLogTerm > myLastLogEntry.term ||
       (prevLogTerm == myLastLogEntry.term &&
        prevLogIndex >= myLastLogEntry.index)) {
-    LOG_TOPIC(DEBUG, Logger::AGENCY) << "voting for " << id << " in term "
+    LOG_TOPIC(INFO, Logger::AGENCY) << "voting for " << id << " in term "
       << _term;
     termNoLock(_term, id);
     return true;
   }
-  LOG_TOPIC(DEBUG, Logger::AGENCY) << "not voting for " << id
+  LOG_TOPIC(INFO, Logger::AGENCY) << "not voting for " << id
     << " since his log is not up to date: "
     << "my last log entry: (" << myLastLogEntry.term << ", "
     << myLastLogEntry.index << "), his last log entry: ("
@@ -435,16 +436,16 @@ void Constituent::callElection() {
   auto timeout = steady_clock::now() +
     duration<double>(_agent->config().minPing() *
                      _agent->config().timeoutMult());
-  
+
   std::vector<std::string> active = _agent->config().active();
   CoordTransactionID coordinatorTransactionID = TRI_NewTickServer();
-  
+
   term_t savedTerm;
   {
     MUTEX_LOCKER(locker, _termVoteLock);
-    
+
     this->termNoLock(_term + 1, _id);  // raise my term, vote for us
-    
+
     _agent->endPrepareLeadership();
     savedTerm = _term;
     LOG_TOPIC(DEBUG, Logger::AGENCY) << "Set _leaderID to NO_LEADER"
@@ -493,7 +494,7 @@ void Constituent::callElection() {
   size_t yea = 1;
   size_t nay = 0;
   size_t majority = size() / 2 + 1;
-  
+
   // We collect votes, we leave the following loop when one of the following
   // conditions is met:
   //   (1) A majority of nay votes have been received
@@ -502,7 +503,7 @@ void Constituent::callElection() {
   //       a conclusive vote.
   while (true) {
 
-    if (steady_clock::now() >= timeout) {       // Timeout. 
+    if (steady_clock::now() >= timeout) {       // Timeout.
       MUTEX_LOCKER(locker, _termVoteLock);
       followNoLock(0);   // do not adjust _term or _votedFor
       break;
@@ -512,14 +513,14 @@ void Constituent::callElection() {
       auto res = ClusterComm::instance()->wait(
         "", coordinatorTransactionID, 0, "",
         duration<double>(timeout - steady_clock::now()).count());
-      
+
       if (res.status == CL_COMM_SENT) {
         auto body = res.result->getBodyVelocyPack();
         VPackSlice slc = body->slice();
-        
+
         // Got ballot
         if (slc.isObject() && slc.hasKey("term") && slc.hasKey("voteGranted")) {
-          
+
           // Follow right away?
           term_t t = slc.get("term").getUInt();
           {
@@ -529,7 +530,7 @@ void Constituent::callElection() {
               break;
             }
           }
-          
+
           // Check result and counts
           if(slc.get("voteGranted").getBool()) { // majority in favour?
             if (++yea >= majority) {
@@ -547,18 +548,18 @@ void Constituent::callElection() {
       follow(0);  // do not adjust _term or _votedFor
       break;
     }
-    
+
   }
-  
+
   LOG_TOPIC(DEBUG, Logger::AGENCY)
     << "Election: Have received " << yea << " yeas and " << nay << " nays, the "
     << (yea >= majority ? "yeas" : "nays") << " have it.";
-  
+
   // Clean up
   if (!isStopping() && cc != nullptr) {
     ClusterComm::instance()->drop("", coordinatorTransactionID, 0, "");
   }
-  
+
 }
 
 void Constituent::update(std::string const& leaderID, term_t t) {
@@ -641,7 +642,7 @@ void Constituent::run() {
   while (
     !this->isStopping() // Obvious
     && (!_agent->ready() ||
-        find(act.begin(), act.end(), _id) == act.end())) { // Active agent 
+        find(act.begin(), act.end(), _id) == act.end())) { // Active agent
     CONDITION_LOCKER(guardv, _cv);
     _cv.wait(50000);
     act = _agent->config().active();
@@ -661,7 +662,7 @@ void Constituent::run() {
       _role = FOLLOWER;
     }
     while (!this->isStopping()) {
-      
+
       role_t role;
       {
         MUTEX_LOCKER(guard, _termVoteLock);
@@ -796,4 +797,3 @@ void Constituent::notifyHeartbeatSent(std::string followerId) {
   MUTEX_LOCKER(guard, _heartBeatMutex);
   _lastHeartbeatSent[followerId] = TRI_microtime();
 }
-

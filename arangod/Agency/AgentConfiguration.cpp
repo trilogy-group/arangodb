@@ -65,7 +65,7 @@ config_t::config_t(
     _waitForSync(w),
     _supervisionFrequency(f),
     _compactionStepSize(c),
-    _compactionKeepSize(k),      
+    _compactionKeepSize(k),
     _supervisionGracePeriod(p),
     _cmdLineTimings(t),
     _version(0),
@@ -73,9 +73,9 @@ config_t::config_t(
     _maxAppendSize(a),
     _lock() {}
 
-config_t::config_t(config_t const& other) { 
+config_t::config_t(config_t const& other) {
   // will call operator=, which will ensure proper locking
-  *this = other; 
+  *this = other;
 }
 
 config_t& config_t::operator=(config_t const& other) {
@@ -169,6 +169,7 @@ void config_t::pingTimes(double minPing, double maxPing) {
     _minPing = minPing;
     _maxPing = maxPing;
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version pingTimes: " << _version;
   }
 }
 
@@ -177,6 +178,7 @@ void config_t::setTimeoutMult(int64_t m) {
   if (_timeoutMult != m) {
     _timeoutMult = m;
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version setTimeoutMult: " << _version;
   }
 }
 
@@ -244,6 +246,7 @@ bool config_t::activePushBack(std::string const& id) {
       std::find(_active.begin(), _active.end(), id) == _active.end()) {
     _active.push_back(id);
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version activePushBack: " << _version;
     return true;
   }
   return false;
@@ -262,6 +265,7 @@ void config_t::eraseFromGossipPeers(std::string const& endpoint) {
       std::remove(_gossipPeers.begin(), _gossipPeers.end(), endpoint),
       _gossipPeers.end());
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version eraseFromGossipPeers: " << _version;
   }
 }
 
@@ -272,6 +276,7 @@ bool config_t::addToPool(std::pair<std::string, std::string> const& i) {
       << "Adding " << i.first << "(" << i.second << ") to agent pool";
     _pool[i.first] = i.second;
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version addToPool: " << _version;
   } else {
     if (_pool.at(i.first) != i.second) {  /// discrepancy!
       return false;
@@ -352,6 +357,7 @@ bool config_t::updateEndpoint(std::string const& id, std::string const& ep) {
   if (_pool[id] != ep) {
     _pool[id] = ep;
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version updateEndpoint: " << _version;
     return true;
   }
   return false;
@@ -400,6 +406,7 @@ void config_t::update(query_t const& message) {
   }
   if (changed) {
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version update: " << _version;
   }
 }
 
@@ -453,6 +460,7 @@ bool config_t::setId(std::string const& i) {
     _id = i;
     _pool[_id] = _endpoint;  // Register my endpoint with it
     ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version setId: " << _version;
     return true;
   } else {
     return false;
@@ -635,7 +643,6 @@ bool config_t::merge(VPackSlice const& conf) {
   }
   LOG_TOPIC(DEBUG, Logger::AGENCY) << ss.str();
   ++_version;
+    LOG_TOPIC(INFO, Logger::AGENCY) << "++_version merge: " << _version;
   return true;
 }
-
-

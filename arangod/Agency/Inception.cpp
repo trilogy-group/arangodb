@@ -56,7 +56,7 @@ void Inception::gossip() {
   if (this->isStopping() || _agent->isStopping()) {
     return;
   }
-  
+
   auto cc = ClusterComm::instance();
 
   if (cc == nullptr) {
@@ -66,14 +66,14 @@ void Inception::gossip() {
 
   LOG_TOPIC(INFO, Logger::AGENCY) << "Entering gossip phase ...";
   using namespace std::chrono;
-  
+
   auto startTime = steady_clock::now();
   seconds timeout(3600);
   size_t j = 0;
   long waitInterval = 250000;
 
   CONDITION_LOCKER(guard, _cv);
-  
+
   while (!this->isStopping() && !_agent->isStopping()) {
 
     auto const config = _agent->config();  // get a copy of conf
@@ -104,8 +104,8 @@ void Inception::gossip() {
           }
         }
         std::string clientid = config.id() + std::to_string(j++);
-        LOG_TOPIC(DEBUG, Logger::AGENCY) << "Sending gossip message: "
-            << out->toJson() << " to peer " << clientid;
+        LOG_TOPIC(INFO, Logger::AGENCY) << "Sending gossip message 1: "
+            << out->toJson() << " to peer " << p;
         if (this->isStopping() || _agent->isStopping() || cc == nullptr) {
           return;
         }
@@ -116,7 +116,7 @@ void Inception::gossip() {
           std::make_shared<GossipCallback>(_agent, version), 1.0, true, 0.5);
       }
     }
-    
+
     // pool entries
     bool complete = true;
     for (auto const& pair : config.pool()) {
@@ -129,8 +129,8 @@ void Inception::gossip() {
         }
         complete = false;
         auto const clientid = config.id() + std::to_string(j++);
-        LOG_TOPIC(DEBUG, Logger::AGENCY) << "Sending gossip message: "
-            << out->toJson() << " to pool member " << clientid;
+        LOG_TOPIC(INFO, Logger::AGENCY) << "Sending gossip message 2: "
+            << out->toJson() << " to pool member " << pair.second;
         if (this->isStopping() || _agent->isStopping() || cc == nullptr) {
           return;
         }
@@ -143,7 +143,7 @@ void Inception::gossip() {
     }
 
     // We're done
-    if (config.poolComplete()) {
+    if (0 && config.poolComplete()) {
       if (complete) {
         LOG_TOPIC(INFO, Logger::AGENCY) << "Agent pool completed. Stopping "
           "active gossipping. Starting RAFT process.";
@@ -164,13 +164,14 @@ void Inception::gossip() {
     }
 
     // don't panic just yet
+    LOG_TOPIC(INFO, Logger::AGENCY) << "waitInterval: " << waitInterval;
     _cv.wait(waitInterval);
     if (waitInterval < 2500000) { // 2.5s
       waitInterval *= 2;
     }
 
   }
-  
+
 }
 
 
@@ -179,7 +180,7 @@ bool Inception::restartingActiveAgent() {
   if (this->isStopping() || _agent->isStopping()) {
     return false;
   }
-  
+
   auto cc = ClusterComm::instance();
 
   if (cc == nullptr) {
@@ -207,18 +208,18 @@ bool Inception::restartingActiveAgent() {
   auto const& greetstr = greeting.toJson();
 
   seconds const timeout(3600);
-  long waitInterval(500000);  
-  
+  long waitInterval(500000);
+
   CONDITION_LOCKER(guard, _cv);
 
   active.erase(
     std::remove(active.begin(), active.end(), myConfig.id()), active.end());
 
   while (!this->isStopping() && !_agent->isStopping()) {
-    
+
     active.erase(
       std::remove(active.begin(), active.end(), ""), active.end());
-    
+
     if (active.size() < majority) {
       LOG_TOPIC(INFO, Logger::AGENCY)
         << "Found majority of agents in agreement over active pool. "
@@ -228,7 +229,7 @@ bool Inception::restartingActiveAgent() {
 
     auto gp = myConfig.gossipPeers();
     std::vector<std::string> informed;
-    
+
     for (auto& p : gp) {
       if (this->isStopping() && _agent->isStopping() && cc==nullptr) {
         return false;
@@ -241,20 +242,20 @@ bool Inception::restartingActiveAgent() {
         auto const& theirConfig   = theirConfigVP->slice();
         auto const& tcc           = theirConfig.get("configuration");
         auto const& theirId       = tcc.get("id").copyString();
-        
+
         _agent->updatePeerEndpoint(theirId, p);
         informed.push_back(p);
       }
     }
-    
-    auto pool = _agent->config().pool();    
+
+    auto pool = _agent->config().pool();
     for (const auto& i : informed) {
       active.erase(
         std::remove(active.begin(), active.end(), i), active.end());
     }
-    
+
     for (auto& p : pool) {
-      
+
       if (p.first != myConfig.id() && p.first != "") {
 
         if (this->isStopping() || _agent->isStopping() || cc == nullptr) {
@@ -264,22 +265,22 @@ bool Inception::restartingActiveAgent() {
         auto comres = cc->syncRequest(
           clientId, 1, p.second, rest::RequestType::POST, path, greetstr,
           std::unordered_map<std::string, std::string>(), 2.0);
-        
+
         if (comres->status == CL_COMM_SENT) {
           try {
-            
+
             auto const  theirConfigVP = comres->result->getBodyVelocyPack();
             auto const& theirConfig   = theirConfigVP->slice();
             auto const& theirLeaderId = theirConfig.get("leaderId").copyString();
             auto const& tcc           = theirConfig.get("configuration");
-            auto const& theirId       = tcc.get("id").copyString();            
-            
+            auto const& theirId       = tcc.get("id").copyString();
+
             // Found RAFT with leader
             if (!theirLeaderId.empty()) {
               LOG_TOPIC(INFO, Logger::AGENCY) <<
                 "Found active RAFTing agency lead by " << theirLeaderId <<
                 ". Finishing startup sequence.";
-              
+
               auto const theirLeaderEp =
                 tcc.get(
                   std::vector<std::string>({"pool", theirLeaderId})).copyString();
@@ -298,7 +299,7 @@ bool Inception::restartingActiveAgent() {
                   continue;
                 }
               }
-              
+
               auto agency = std::make_shared<Builder>();
               agency->openObject();
               agency->add("term", theirConfig.get("term"));
@@ -335,9 +336,9 @@ bool Inception::restartingActiveAgent() {
                     LOG_TOPIC(FATAL, Logger::AGENCY)
                       << "Assumed active RAFT peer and I disagree on active membership:";
                     LOG_TOPIC(FATAL, Logger::AGENCY)
-                      << "Their active list is " << theirActive.toJson();  
+                      << "Their active list is " << theirActive.toJson();
                     LOG_TOPIC(FATAL, Logger::AGENCY)
-                      << "My active list is " << myActive.toJson();  
+                      << "My active list is " << myActive.toJson();
                     FATAL_ERROR_EXIT();
                   }
                   return false;
@@ -348,12 +349,12 @@ bool Inception::restartingActiveAgent() {
                 LOG_TOPIC(FATAL, Logger::AGENCY)
                   << "Assumed active RAFT peer and I disagree on active agency size:";
                 LOG_TOPIC(FATAL, Logger::AGENCY)
-                  << "Their active list is " << theirActive.toJson();  
+                  << "Their active list is " << theirActive.toJson();
                 LOG_TOPIC(FATAL, Logger::AGENCY)
-                  << "My active list is " << myActive.toJson();  
+                  << "My active list is " << myActive.toJson();
                 FATAL_ERROR_EXIT();
               }
-            }    
+            }
           } catch (std::exception const& e) {
             if (!this->isStopping()) {
               LOG_TOPIC(FATAL, Logger::AGENCY)
@@ -363,11 +364,11 @@ bool Inception::restartingActiveAgent() {
             }
             return false;
           }
-        } 
+        }
       }
     }
 
-    
+
     // Timed out? :(
     if ((steady_clock::now() - startTime) > timeout) {
       if (myConfig.poolComplete()) {
@@ -378,16 +379,16 @@ bool Inception::restartingActiveAgent() {
       }
       break;
     }
-    
+
     _cv.wait(waitInterval);
     if (waitInterval < 2500000) { // 2.5s
       waitInterval *= 2;
     }
-    
+
   }
 
   return false;
-  
+
 }
 
 void Inception::reportVersionForEp(std::string const& endpoint, size_t version) {
@@ -408,7 +409,7 @@ void Inception::run() {
   }
 
   config_t config = _agent->config();
-  
+
   // Are we starting from persisted pool?
   if (config.startup() == "persistence") {
     if (restartingActiveAgent()) {
@@ -423,7 +424,7 @@ void Inception::run() {
     }
     return;
   }
-  
+
   // Gossip
   gossip();
 
