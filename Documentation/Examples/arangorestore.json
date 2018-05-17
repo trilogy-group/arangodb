@@ -121,7 +121,7 @@
     "type" : "boolean"
   },
   "input-directory" : {
-    "default" : "C:\\Daten\\ArangoDB\\arangodb\\dump",
+    "default" : "/root/arangodb/dump",
     "description" : "input directory",
     "hidden" : false,
     "section" : "",
@@ -139,6 +139,13 @@
   "log.color" : {
     "default" : true,
     "description" : "use colors for TTY logging",
+    "hidden" : false,
+    "section" : "log",
+    "type" : "boolean"
+  },
+  "log.escape" : {
+    "default" : true,
+    "description" : "escape characters when logging",
     "hidden" : false,
     "section" : "log",
     "type" : "boolean"
@@ -271,7 +278,7 @@
     "hidden" : true,
     "section" : "random",
     "type" : "uint32",
-    "values" : "Possible values: 1, 5"
+    "values" : "Possible values: 1, 2, 3, 4"
   },
   "server.authentication" : {
     "default" : false,
@@ -343,6 +350,13 @@
     "hidden" : false,
     "section" : "temp",
     "type" : "string"
+  },
+  "threads" : {
+    "default" : 2,
+    "description" : "maximum number of collections to process in parallel",
+    "hidden" : false,
+    "section" : "",
+    "type" : "uint32"
   },
   "version" : {
     "default" : false,

@@ -7,7 +7,7 @@
     "type" : "boolean"
   },
   "batch-size" : {
-    "default" : 16777216,
+    "default" : 1048576,
     "description" : "size for individual data batches (in bytes)",
     "hidden" : false,
     "section" : "",
@@ -129,6 +129,13 @@
     "section" : "log",
     "type" : "boolean"
   },
+  "log.escape" : {
+    "default" : true,
+    "description" : "escape characters when logging",
+    "hidden" : false,
+    "section" : "log",
+    "type" : "boolean"
+  },
   "log.file" : {
     "default" : "-",
     "description" : "shortcut for '--log.output file://<filename>'",
@@ -239,7 +246,7 @@
   },
   "on-duplicate" : {
     "default" : "error",
-    "description" : "action to perform when a unique key constraint violation occurs. Possible values: error, update, ignore, replace",
+    "description" : "action to perform when a unique key constraint violation occurs. Possible values: ignore, replace, update, error",
     "hidden" : false,
     "section" : "",
     "type" : "string",
@@ -272,7 +279,7 @@
     "hidden" : true,
     "section" : "random",
     "type" : "uint32",
-    "values" : "Possible values: 1, 5"
+    "values" : "Possible values: 1, 2, 3, 4"
   },
   "remove-attribute" : {
     "default" : [

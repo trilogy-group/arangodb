@@ -114,6 +114,13 @@
     "section" : "log",
     "type" : "boolean"
   },
+  "log.escape" : {
+    "default" : true,
+    "description" : "escape characters when logging",
+    "hidden" : false,
+    "section" : "log",
+    "type" : "boolean"
+  },
   "log.file" : {
     "default" : "-",
     "description" : "shortcut for '--log.output file://<filename>'",
@@ -249,7 +256,7 @@
     "hidden" : true,
     "section" : "random",
     "type" : "uint32",
-    "values" : "Possible values: 1, 5"
+    "values" : "Possible values: 1, 2, 3, 4"
   },
   "replication-factor" : {
     "default" : 1,

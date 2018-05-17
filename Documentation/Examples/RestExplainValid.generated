@@ -34,6 +34,7 @@ x-content-type-options: nosniff
           <span class="hljs-string">"id"</span> : <span class="hljs-number">0</span>, 
           <span class="hljs-string">"name"</span> : <span class="hljs-string">"p"</span> 
         }, 
+        <span class="hljs-string">"projections"</span> : [ ], 
         <span class="hljs-string">"producesResult"</span> : <span class="hljs-literal">true</span> 
       }, 
       { 
@@ -47,7 +48,8 @@ x-content-type-options: nosniff
         <span class="hljs-string">"inVariable"</span> : { 
           <span class="hljs-string">"id"</span> : <span class="hljs-number">0</span>, 
           <span class="hljs-string">"name"</span> : <span class="hljs-string">"p"</span> 
-        } 
+        }, 
+        <span class="hljs-string">"count"</span> : <span class="hljs-literal">true</span> 
       } 
     ], 
     <span class="hljs-string">"rules"</span> : [ ], 

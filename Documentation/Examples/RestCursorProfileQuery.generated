@@ -119,7 +119,8 @@ x-content-type-options: nosniff
           <span class="hljs-string">"inVariable"</span> : { 
             <span class="hljs-string">"id"</span> : <span class="hljs-number">3</span>, 
             <span class="hljs-string">"name"</span> : <span class="hljs-string">"2"</span> 
-          } 
+          }, 
+          <span class="hljs-string">"count"</span> : <span class="hljs-literal">true</span> 
         } 
       ], 
       <span class="hljs-string">"rules"</span> : [ 
@@ -151,49 +152,51 @@ x-content-type-options: nosniff
       <span class="hljs-string">"scannedIndex"</span> : <span class="hljs-number">0</span>, 
       <span class="hljs-string">"filtered"</span> : <span class="hljs-number">0</span>, 
       <span class="hljs-string">"httpRequests"</span> : <span class="hljs-number">0</span>, 
-      <span class="hljs-string">"executionTime"</span> : <span class="hljs-number">0.7826855182647705</span>, 
+      <span class="hljs-string">"fullCount"</span> : <span class="hljs-number">1</span>, 
+      <span class="hljs-string">"count"</span> : <span class="hljs-number">1</span>, 
+      <span class="hljs-string">"executionTime"</span> : <span class="hljs-number">0.7829141616821289</span>, 
       <span class="hljs-string">"nodes"</span> : [ 
         { 
           <span class="hljs-string">"id"</span> : <span class="hljs-number">1</span>, 
           <span class="hljs-string">"calls"</span> : <span class="hljs-number">2</span>, 
           <span class="hljs-string">"items"</span> : <span class="hljs-number">1</span>, 
-          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">9.5367431640625e-7</span> 
+          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.0000026226043701171875</span> 
         }, 
         { 
           <span class="hljs-string">"id"</span> : <span class="hljs-number">2</span>, 
           <span class="hljs-string">"calls"</span> : <span class="hljs-number">2</span>, 
           <span class="hljs-string">"items"</span> : <span class="hljs-number">1</span>, 
-          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.27073073387145996</span> 
+          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.2708146572113037</span> 
         }, 
         { 
           <span class="hljs-string">"id"</span> : <span class="hljs-number">3</span>, 
           <span class="hljs-string">"calls"</span> : <span class="hljs-number">2</span>, 
           <span class="hljs-string">"items"</span> : <span class="hljs-number">1</span>, 
-          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.7823588848114014</span> 
+          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.7823867797851562</span> 
         }, 
         { 
           <span class="hljs-string">"id"</span> : <span class="hljs-number">4</span>, 
           <span class="hljs-string">"calls"</span> : <span class="hljs-number">2</span>, 
           <span class="hljs-string">"items"</span> : <span class="hljs-number">1</span>, 
-          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.0000040531158447265625</span> 
+          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.000010013580322265625</span> 
         }, 
         { 
           <span class="hljs-string">"id"</span> : <span class="hljs-number">5</span>, 
           <span class="hljs-string">"calls"</span> : <span class="hljs-number">2</span>, 
           <span class="hljs-string">"items"</span> : <span class="hljs-number">1</span>, 
-          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.7823820114135742</span> 
+          <span class="hljs-string">"runtime"</span> : <span class="hljs-number">0.7823960781097412</span> 
         } 
       ] 
     }, 
     <span class="hljs-string">"profile"</span> : { 
-      <span class="hljs-string">"initializing"</span> : <span class="hljs-number">0.0000011920928955078125</span>, 
-      <span class="hljs-string">"parsing"</span> : <span class="hljs-number">0.00002765655517578125</span>, 
-      <span class="hljs-string">"optimizing ast"</span> : <span class="hljs-number">0.000003337860107421875</span>, 
-      <span class="hljs-string">"loading collections"</span> : <span class="hljs-number">0.0000019073486328125</span>, 
-      <span class="hljs-string">"instantiating plan"</span> : <span class="hljs-number">0.000012159347534179688</span>, 
-      <span class="hljs-string">"optimizing plan"</span> : <span class="hljs-number">0.00003838539123535156</span>, 
-      <span class="hljs-string">"executing"</span> : <span class="hljs-number">0.78240966796875</span>, 
-      <span class="hljs-string">"finalizing"</span> : <span class="hljs-number">0.0001850128173828125</span> 
+      <span class="hljs-string">"initializing"</span> : <span class="hljs-number">0.0000040531158447265625</span>, 
+      <span class="hljs-string">"parsing"</span> : <span class="hljs-number">0.00006604194641113281</span>, 
+      <span class="hljs-string">"optimizing ast"</span> : <span class="hljs-number">0.000009775161743164062</span>, 
+      <span class="hljs-string">"loading collections"</span> : <span class="hljs-number">0.00000476837158203125</span>, 
+      <span class="hljs-string">"instantiating plan"</span> : <span class="hljs-number">0.00005078315734863281</span>, 
+      <span class="hljs-string">"optimizing plan"</span> : <span class="hljs-number">0.00009679794311523438</span>, 
+      <span class="hljs-string">"executing"</span> : <span class="hljs-number">0.7824456691741943</span>, 
+      <span class="hljs-string">"finalizing"</span> : <span class="hljs-number">0.00021839141845703125</span> 
     } 
   }, 
   <span class="hljs-string">"error"</span> : <span class="hljs-literal">false</span>, 

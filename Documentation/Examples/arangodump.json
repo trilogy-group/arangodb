@@ -108,6 +108,13 @@
     "section" : "log",
     "type" : "boolean"
   },
+  "log.escape" : {
+    "default" : true,
+    "description" : "escape characters when logging",
+    "hidden" : false,
+    "section" : "log",
+    "type" : "boolean"
+  },
   "log.file" : {
     "default" : "-",
     "description" : "shortcut for '--log.output file://<filename>'",
@@ -217,14 +224,14 @@
     "type" : "boolean"
   },
   "output-directory" : {
-    "default" : "C:\\Daten\\ArangoDB\\arangodb\\dump",
+    "default" : "/root/arangodb/dump",
     "description" : "output directory",
     "hidden" : false,
     "section" : "",
     "type" : "string"
   },
   "overwrite" : {
-    "default" : false,
+    "default" : true,
     "description" : "overwrite data in output directory",
     "hidden" : false,
     "section" : "",
@@ -243,7 +250,7 @@
     "hidden" : true,
     "section" : "random",
     "type" : "uint32",
-    "values" : "Possible values: 1, 5"
+    "values" : "Possible values: 1, 2, 3, 4"
   },
   "server.authentication" : {
     "default" : false,

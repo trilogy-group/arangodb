@@ -25,6 +25,7 @@ arangosh&gt; stmt.explain({ <span class="hljs-attr">optimizer</span>: { <span cl
           <span class="hljs-string">"id"</span> : <span class="hljs-number">0</span>, 
           <span class="hljs-string">"name"</span> : <span class="hljs-string">"i"</span> 
         }, 
+        <span class="hljs-string">"projections"</span> : [ ], 
         <span class="hljs-string">"producesResult"</span> : <span class="hljs-literal">true</span> 
       }, 
       { 
@@ -157,7 +158,8 @@ arangosh&gt; stmt.explain({ <span class="hljs-attr">optimizer</span>: { <span cl
         <span class="hljs-string">"inVariable"</span> : { 
           <span class="hljs-string">"id"</span> : <span class="hljs-number">6</span>, 
           <span class="hljs-string">"name"</span> : <span class="hljs-string">"5"</span> 
-        } 
+        }, 
+        <span class="hljs-string">"count"</span> : <span class="hljs-literal">true</span> 
       } 
     ], 
     <span class="hljs-string">"rules"</span> : [ ], 
