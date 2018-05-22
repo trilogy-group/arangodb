@@ -177,7 +177,7 @@ MMFilesEngine::~MMFilesEngine() {}
 Result MMFilesEngine::dropDatabase(TRI_vocbase_t* database) {
   // drop logfile barriers for database
   MMFilesLogfileManager::instance()->dropLogfileBarriers(database->id());
-  
+
   // delete persistent indexes for this database
   MMFilesPersistentIndexFeature::dropDatabase(database->id());
 
@@ -721,7 +721,7 @@ void MMFilesEngine::waitForSyncTick(TRI_voc_tick_t tick) {
   if (application_features::ApplicationServer::isStopping()) {
     THROW_ARANGO_EXCEPTION(TRI_ERROR_SHUTTING_DOWN);
   }
-  
+
   MMFilesLogfileManager::instance()->slots()->waitForTick(tick);
 }
 
@@ -2364,7 +2364,7 @@ VPackBuilder MMFilesEngine::loadCollectionInfo(TRI_vocbase_t* vocbase,
       THROW_ARANGO_EXCEPTION(TRI_ERROR_ARANGO_ILLEGAL_PARAMETER_FILE);
     }
   }
-      
+
   VPackBuilder content;
   VPackSlice slice;
   try {
@@ -2702,7 +2702,7 @@ int MMFilesEngine::startCleanup(TRI_vocbase_t* vocbase) {
     MUTEX_LOCKER(locker, _threadsLock);
 
     thread.reset(new MMFilesCleanupThread(vocbase));
-  
+
     if (!thread->start()) {
       LOG_TOPIC(ERR, arangodb::Logger::FIXME) << "could not start cleanup thread";
       THROW_ARANGO_EXCEPTION(TRI_ERROR_OUT_OF_MEMORY);
@@ -2787,7 +2787,7 @@ int MMFilesEngine::beginShutdownCompactor(TRI_vocbase_t* vocbase) {
 
     thread = (*it).second;
   }
- 
+
   TRI_ASSERT(thread != nullptr);
 
   thread->beginShutdown();
@@ -2813,7 +2813,7 @@ int MMFilesEngine::stopCompactor(TRI_vocbase_t* vocbase) {
     thread = (*it).second;
     _compactorThreads.erase(it);
   }
-  
+
   TRI_ASSERT(thread != nullptr);
 
   thread->beginShutdown();
@@ -2950,6 +2950,10 @@ int MMFilesEngine::openCollection(TRI_vocbase_t* vocbase,
             result = res;
             stop = true;
             break;
+          } else {
+            LOG_TOPIC(DEBUG, Logger::DATAFILES)
+                << "renamed compaction file '" << filename << "' to '"
+                << newName << "'";
           }
         }
 
@@ -3073,6 +3077,18 @@ int MMFilesEngine::openCollection(TRI_vocbase_t* vocbase,
 
     // got more than one journal. now add all the journals but the last one as datafiles
     for (auto& it : journals) {
+      // ensure sealed before renaming
+      if (!it->isSealed()) { // band-aid fix
+        int res = it->seal();
+        if (res != TRI_ERROR_NO_ERROR) {
+          result = res;
+          stop = true;
+          LOG_TOPIC(ERR, arangodb::Logger::FIXME)
+            << "cannot seal extra journal file '" << it->getName() << "'";
+          break;
+        }
+      }
+
       std::string dname("datafile-" + std::to_string(it->fid()) + ".db");
       std::string filename =
           arangodb::basics::FileUtils::buildFilename(physical->path(), dname);
@@ -3413,7 +3429,7 @@ int MMFilesEngine::writeCreateDatabaseMarker(TRI_voc_tick_t id,
 
 VPackBuilder MMFilesEngine::getReplicationApplierConfiguration(TRI_vocbase_t* vocbase, int& status) {
   std::string const filename = arangodb::basics::FileUtils::buildFilename(databasePath(vocbase), "REPLICATION-APPLIER-CONFIG");
- 
+
   return getReplicationApplierConfiguration(filename, status);
 }
 
@@ -3474,12 +3490,12 @@ int MMFilesEngine::saveReplicationApplierConfiguration(TRI_vocbase_t* vocbase, a
   return saveReplicationApplierConfiguration(filename, slice, doSync);
 }
 
-int MMFilesEngine::saveReplicationApplierConfiguration(arangodb::velocypack::Slice slice, bool doSync) { 
+int MMFilesEngine::saveReplicationApplierConfiguration(arangodb::velocypack::Slice slice, bool doSync) {
   std::string const filename = arangodb::basics::FileUtils::buildFilename(_databasePath, "GLOBAL-REPLICATION-APPLIER-CONFIG");
   return saveReplicationApplierConfiguration(filename, slice, doSync);
 }
 
-int MMFilesEngine::saveReplicationApplierConfiguration(std::string const& filename, arangodb::velocypack::Slice slice, bool doSync) { 
+int MMFilesEngine::saveReplicationApplierConfiguration(std::string const& filename, arangodb::velocypack::Slice slice, bool doSync) {
   if (!VelocyPackHelper::velocyPackToFile(filename, slice, doSync)) {
     return TRI_errno();
   }

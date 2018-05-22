@@ -815,6 +815,7 @@ int MMFilesCollection::reserveJournalSpace(TRI_voc_tick_t tick,
     MMFilesDatafile* datafile = nullptr;
 
     if (_journals.empty()) {
+      LOG_TOPIC(TRACE, Logger::COLLECTOR) << "journal list for '" << _logicalCollection->name() << "' empty, creating new journal file";
       // create enough room in the journals vector
       _journals.reserve(_journals.size() + 1);
 
@@ -1091,11 +1092,12 @@ MMFilesDatafile* MMFilesCollection::createDatafile(TRI_voc_fid_t fid,
     std::string filename =
         arangodb::basics::FileUtils::buildFilename(path(), jname);
 
+    std::string oldName = datafile->getName();
     int res = datafile->rename(filename);
 
     if (res != TRI_ERROR_NO_ERROR) {
       LOG_TOPIC(ERR, arangodb::Logger::DATAFILES)
-          << "failed to rename journal '" << datafile->getName() << "' to '"
+          << "failed to rename journal '" << oldName << "' to '"
           << filename << "': " << TRI_errno_string(res);
 
       std::string temp(datafile->getName());
@@ -1106,7 +1108,7 @@ MMFilesDatafile* MMFilesCollection::createDatafile(TRI_voc_fid_t fid,
     }
 
     LOG_TOPIC(TRACE, arangodb::Logger::DATAFILES) << "renamed journal from '"
-                                                  << datafile->getName() << "' to '"
+                                                  << oldName << "' to '"
                                                   << filename << "'";
   }
 
@@ -1400,6 +1402,9 @@ bool MMFilesCollection::applyForTickRange(
     CONDITIONAL_READ_LOCKER(readLocker, _filesLock, e._isJournal);
 
     if (!e._isJournal) {
+      if (!datafile->isSealed()) {
+        LOG_TOPIC(FATAL, Logger::DATAFILES) << "unsealed datafile " << datafile->getName();
+      }
       TRI_ASSERT(datafile->isSealed());
     }
 
@@ -1950,7 +1955,7 @@ Result MMFilesCollection::read(transaction::Methods* trx, VPackSlice const& key,
     }
   }
   TRI_DEFER(if (lock) { unlockRead(useDeadlockDetector, trx->tid()); });
-  
+
   Result res = lookupDocument(trx, key, result);
   if (res.fail()) {
     return res;
@@ -2115,7 +2120,7 @@ void MMFilesCollection::prepareIndexes(VPackSlice indexesSlice) {
     }
   }
 #endif
-  
+
   TRI_ASSERT(!_indexes.empty());
 }
 
@@ -3412,7 +3417,7 @@ Result MMFilesCollection::update(
     operation.revert(trx);
   } else {
     result.setManaged(newDoc.begin(), documentId);
-    
+
     if (options.waitForSync) {
       // store the tick that was used for writing the new document
       resultMarkerTick = operation.tick();
