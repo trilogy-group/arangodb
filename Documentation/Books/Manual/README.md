@@ -3,7 +3,7 @@ ArangoDB VERSION_NUMBER Documentation
 
 bla bla bla 
 
-
+new edit
 Welcome to the ArangoDB documentation!
 
 {% hint 'info' %}
