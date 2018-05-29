@@ -1,6 +1,9 @@
 ArangoDB VERSION_NUMBER Documentation
 =====================================
 
+bla bla bla 
+
+
 Welcome to the ArangoDB documentation!
 
 {% hint 'info' %}
@@ -10,7 +13,7 @@ New and eager to try out ArangoDB? Start right away with our beginner's guide:
 
 **Structure**
 
-The documentation is organized in four handbooks:
+The documentation is organized PTP in four handbooks:
 
 - This manual describes ArangoDB and its features in detail for you as a user,
   developer and administrator.
