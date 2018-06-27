@@ -5,7 +5,7 @@ This section includes information related to the _datacenter to datacenter repli
 security.
 
 For a general introduction to the _datacenter to datacenter replication_, please
-refer to the [Datacenter to datacenter replication](..\..\Scalability\DC2DC\README.md)
+refer to the [Datacenter to datacenter replication](../../Scalability/DC2DC/README.md)
 chapter.
 
 ## Firewall settings
@@ -66,13 +66,14 @@ Below you'll find an overview of these connections and the TCP ports that should
 Digital certificates are used in many places in _ArangoSync_ for both encryption
 and authentication.
 
-<br/> In ArangoSync all network connections are using Transport Layer Security (TLS),
+In ArangoSync all network connections are using Transport Layer Security (TLS),
 a set of protocols that ensure that all network traffic is encrypted.
 For this TLS certificates are used. The server side of the network connection
 offers a TLS certificate. This certificate is (often) verified by the client side of the network
 connection, to ensure that the certificate is signed by a trusted Certificate Authority (CA).
 This ensures the integrity of the server.
-<br/> In several places additional certificates are used for authentication. In those cases
+
+In several places additional certificates are used for authentication. In those cases
 the client side of the connection offers a client certificate (on top of an existing TLS connection).
 The server side of the connection uses the client certificate to authenticate
 the client and (optionally) decides which rights should be assigned to the client.
@@ -83,10 +84,10 @@ however it is more convenient (and common) to use your own CA.
 ### Formats
 
 All certificates are x509 certificates with a public key, a private key and
-an optional chain of certificates used to sign the certificate (this chain is
-typically provided by the Certificate Authority (CA)).
-<br/>Depending on their use, certificates stored in a different format.
+an optional chain of certificates used to sign the certificate. This chain is
+typically provided by the Certificate Authority (CA).
 
+Depending on their use, certificates stored in a different format.
 The following formats are used:
 
 - Public key only (`.crt`): A file that contains only the public key of
@@ -166,8 +167,6 @@ arangosync create tls ca \
 ```
 
 Make sure to protect and store both generated files (`my-tls-ca.crt` & `my-tls-ca.key`) in a safe place.
-<br/>Note: CA certificates have a much longer lifetime than normal certificates.
-Therefore even more care is needed to store them safely.
 
 To create a CA certificate used to **sign client authentication certificates**, run:
 
@@ -178,22 +177,26 @@ arangosync create client-auth ca \
 
 Make sure to protect and store both generated files (`my-client-auth-ca.crt` & `my-client-auth-ca.key`)
 in a safe place.
-<br/>Note: CA certificates have a much longer lifetime than normal certificates.
+
+{% hint 'warning' %}
+CA certificates have a much longer lifetime than normal certificates.
 Therefore even more care is needed to store them safely.
+{% endhint %}
 
 ### Renewing certificates
 
 All certificates have meta information in them the limit their use in function,
 target & lifetime.
-<br/> A certificate created for client authentication (function) cannot be used as a TLS server certificate
-(same is true for the reverse).
-<br/> A certificate for host `myserver` (target) cannot be used for host `anotherserver`.
-<br/> A certficiate that is valid until October 2017 (limetime) cannot be used after October 2017.
+
+- A certificate created for client authentication (function) cannot be used as
+  a TLS server certificate (same is true for the reverse).
+- A certificate for host `myserver` (target) cannot be used for host `anotherserver`.
+- A certificate that is valid until October 2017 (lifetime) cannot be used after October 2017.
 
 If anything changes in function, target or lifetime you need a new certificate.
 
 The procedure for creating a renewed certificate is the same as for creating a "first" certificate.
-<br/> After creating the renewed certificate the process(es) using them have to be updated.
+After creating the renewed certificate the process(es) using them have to be updated.
 This mean restarting them. All ArangoSync components are designed to support stopping and starting
 single instances, but do not restart more than 1 instance at the same time.
 As soon as 1 instance has been restarted, give it some time to "catch up" before restarting

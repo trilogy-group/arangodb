@@ -47,7 +47,8 @@ indication that something may be wrong. In case that happens, give it some time
 (incremental synchronization may take quite some time for large collections)
 and look at the status again. If the statuses do not change (or change, but not reach `running`)
 it is time to inspects the metrics & log files.
-<br/> When the metrics or logs seem to indicate a problem in a sync master or worker, it is
+
+When the metrics or logs seem to indicate a problem in a sync master or worker, it is
 safe to restart it, as long as only 1 instance is restarted at a time.
 Give restarted instances some time to "catch up".
 
@@ -90,11 +91,13 @@ This is what you must do in that case:
 
    See [Stopping synchronization](../../Administration/DC2DC/README.md#stopping-synchronization)
    for how to cleanup the source datacenter when it becomes available again.
-1. Verify that configuration has completely stopped using:
+
+2. Verify that configuration has completely stopped using:
    ```bash
    arangosync get status ... -v
    ```
-1. Reconfigure your applications to use the target (backup) datacenter.
+
+3. Reconfigure your applications to use the target (backup) datacenter.
 
 When the original source datacenter is restored, you may switch roles and
 make it the target datacenter. To do so, use `arangosync configure sync ...`
