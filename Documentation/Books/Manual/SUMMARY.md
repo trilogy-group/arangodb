@@ -41,6 +41,7 @@
     * [Options](Programs/Arangosh/Options.md)
 #   https://@github.com//arangodb-helper/arangodb.git;arangodb;docs/Manual;;/ 
   * [ArangoDB Starter](Programs/Starter/README.md)
+    * [Architecture](Programs/Starter/Architecture.md)
     * [Options](Programs/Starter/Options.md)
     * [Security](Programs/Starter/Security.md)
   * [Arangodump](Programs/Arangodump/README.md)
