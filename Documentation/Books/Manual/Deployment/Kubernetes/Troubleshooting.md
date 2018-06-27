@@ -47,11 +47,13 @@ These logs are accessible through the `Pods` that group these containers.
 
 To fetch the logs of the default container running in a `Pod`, run:
 
+{% raw %}
 ```bash
 kubectl logs <pod-name> -n <namespace>
 # or with follow option to keep inspecting logs while they are written
 kubectl logs <pod-name> -n <namespace> -f
 ```
+{% endraw %}
 
 To inspect the logs of a specific container in `Pod`, add `-c <container-name>`.
 You can find the names of the containers in the `Pod`, using `kubectl describe pod ...`.
