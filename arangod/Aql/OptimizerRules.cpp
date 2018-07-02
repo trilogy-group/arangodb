@@ -3206,12 +3206,12 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
       THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
     }
 
-    if (node->getType() != EN::UPSERT &&
-        !node->isInInnerLoop() &&
-        !getSingleShardId(plan.get(), node, ExecutionNode::castTo<ModificationNode const*>(node)->collection()).empty()) {
-      // no need to insert a DistributeNode for a single operation that is restricted to a single shard
-      continue;
-    }
+    //if (node->getType() != EN::UPSERT &&
+    //    !node->isInInnerLoop() &&
+    //    !getSingleShardId(plan.get(), node, ExecutionNode::castTo<ModificationNode const*>(node)->collection()).empty()) {
+    //  // no need to insert a DistributeNode for a single operation that is restricted to a single shard
+    //  continue;
+    //}
 
     ExecutionNode* originalParent = nullptr;
     if (node->hasParent()) {
@@ -3421,7 +3421,7 @@ void arangodb::aql::collectInClusterRule(Optimizer* opt,
   SmallVector<ExecutionNode*>::allocator_type::arena_type a;
   SmallVector<ExecutionNode*> nodes{a};
   plan->findNodesOfType(nodes, EN::COLLECT, true);
-  
+
   std::unordered_set<Variable const*> allUsed;
 
   for (auto& node : nodes) {
@@ -3440,7 +3440,7 @@ void arangodb::aql::collectInClusterRule(Optimizer* opt,
 
     while (current != nullptr) {
       bool eligible = true;
-      
+
       // check if any of the nodes we pass use a variable that will not be
       // available after we insert a new COLLECT on top of it (note: COLLECT
       // will eliminate all variables from the scope but its own)
