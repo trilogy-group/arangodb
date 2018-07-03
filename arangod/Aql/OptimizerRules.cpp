@@ -3206,12 +3206,13 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
       THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
     }
 
-    //if (node->getType() != EN::UPSERT &&
-    //    !node->isInInnerLoop() &&
-    //    !getSingleShardId(plan.get(), node, ExecutionNode::castTo<ModificationNode const*>(node)->collection()).empty()) {
-    //  // no need to insert a DistributeNode for a single operation that is restricted to a single shard
-    //  continue;
-    //}
+    bool singleShard = false;
+    if (node->getType() != EN::UPSERT &&
+        !node->isInInnerLoop() &&
+        !getSingleShardId(plan.get(), node, ExecutionNode::castTo<ModificationNode const*>(node)->collection()).empty()) {
+      // no need to insert a DistributeNode for a single operation that is restricted to a single shard
+      singleShard = true;
+    }
 
     ExecutionNode* originalParent = nullptr;
     if (node->hasParent()) {
@@ -3242,7 +3243,7 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
     // Throws if collection is not found!
     if (collInfo->isSmart() && collInfo->type() == TRI_COL_TYPE_EDGE) {
       distributeInClusterRuleSmartEdgeCollection(
-          plan.get(), snode, node, originalParent, wasModified);
+          plan.get(), snode, node, originalParent, singleShard, wasModified);
       continue;
     }
 #endif
@@ -3304,7 +3305,8 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
         inputVariable,
         inputVariable,
         createKeys,
-        true
+        true /* allowKeyConversionToObject*/,
+        singleShard
       );
     } else if (nodeType == ExecutionNode::REPLACE) {
       std::vector<Variable const*> v = node->getVariablesUsedHere();
@@ -3322,7 +3324,8 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
         inputVariable,
         inputVariable,
         false,
-        v.size() > 1
+        v.size() > 1,
+        singleShard
       );
     } else if (nodeType == ExecutionNode::UPDATE) {
       std::vector<Variable const*> v = node->getVariablesUsedHere();
@@ -3342,7 +3345,8 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
         inputVariable,
         inputVariable,
         false,
-        v.size() > 1
+        v.size() > 1,
+        singleShard
       );
     } else if (nodeType == ExecutionNode::UPSERT) {
       // an UPSERT node has two input variables!
@@ -3350,7 +3354,7 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
       TRI_ASSERT(v.size() >= 2);
 
       auto d = new DistributeNode(
-        plan.get(), plan->nextId(), collection, v[0], v[1], true, true
+        plan.get(), plan->nextId(), collection, v[0], v[1], true, true, singleShard
       );
       d->setAllowSpecifiedKeys(true);
       distNode = ExecutionNode::castTo<ExecutionNode*>(d);
@@ -4117,12 +4121,35 @@ void arangodb::aql::restrictToSingleShardRule(
     while (current != nullptr) {
       auto const currentType = current->getType();
 
-      // don't do this if we are already distributing!
+      ExecutionNode* distributionNode = nullptr;
+      ExecutionNode* remoteNode = nullptr;
+
+      // don't do this if we are already distributing and the node is not flagged to be replaced by this rule
       auto deps = current->getDependencies();
-      if (deps.size() &&
-          deps[0]->getType() == ExecutionNode::REMOTE &&
-          deps[0]->hasDependency() &&
-          deps[0]->getFirstDependency()->getType() == ExecutionNode::DISTRIBUTE) {
+      if (deps.size() && deps[0]->getType() == ExecutionNode::REMOTE && deps[0]->hasDependency()){
+        remoteNode = deps[0];
+        auto* depdep = remoteNode->getFirstDependency();
+        if(depdep->getType() == ExecutionNode::DISTRIBUTE){
+          if(!(static_cast<DistributeNode*>(depdep)->singleShard())) {
+            break;
+          } else {
+            distributionNode = depdep;
+          }
+        }
+      }
+
+      auto unlink = [&](){
+        if(distributionNode){
+          LOG_DEVEL << "unlink";
+          plan->unlinkNode(distributionNode);
+          if(remoteNode){
+            LOG_DEVEL << "unlink remote";
+            plan->unlinkNode(remoteNode);
+          }
+        }
+      };
+
+      if (distributionNode && !remoteNode) {
         break;
       }
 
@@ -4139,6 +4166,7 @@ void arangodb::aql::restrictToSingleShardRule(
           auto* modNode = ExecutionNode::castTo<ModificationNode*>(current);
           modNode->getOptions().ignoreDocumentNotFound = false;
           modNode->restrictToShard(shardId);
+          unlink();
         }
         break;
       } else if (currentType == ExecutionNode::INDEX) {
@@ -4148,6 +4176,7 @@ void arangodb::aql::restrictToSingleShardRule(
         if (!shardId.empty()) {
           wasModified = true;
           ExecutionNode::castTo<IndexNode*>(current)->restrictToShard(shardId);
+          unlink();
         }
         break;
       } else if (currentType == ExecutionNode::UPSERT ||

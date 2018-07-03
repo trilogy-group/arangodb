@@ -221,7 +221,7 @@ void RestAqlHandler::setupClusterQuery() {
   if (ttl <= 0) {
     ttl = _queryRegistry->defaultTTL();
   }
-  
+
   // creates a StandaloneContext or a leasing context
   auto ctx = transaction::SmartContext::Create(_vocbase);
 
@@ -291,7 +291,7 @@ bool RestAqlHandler::registerSnippets(
       options,
       (needToLock ? PART_MAIN : PART_DEPENDENT)
     );
-    
+
     // enables the query to get the correct transaction
     query->setTransactionContext(ctx);
 

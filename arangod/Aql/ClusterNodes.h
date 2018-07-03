@@ -209,15 +209,17 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
       Variable const* variable,
       Variable const* alternativeVariable,
       bool createKeys,
-      bool allowKeyConversionToObject)
+      bool allowKeyConversionToObject,
+      bool singleShard)
     : ScatterNode(plan, id),
       CollectionAccessingNode(collection),
       _variable(variable),
       _alternativeVariable(alternativeVariable),
       _createKeys(createKeys),
       _allowKeyConversionToObject(allowKeyConversionToObject),
-      _allowSpecifiedKeys(false) {
-  }
+      _allowSpecifiedKeys(false),
+      _singleShard(singleShard)
+  { }
 
   DistributeNode(ExecutionPlan*, arangodb::velocypack::Slice const& base);
 
@@ -244,13 +246,14 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
       _variable,
       _alternativeVariable,
       _createKeys,
-      _allowKeyConversionToObject
+      _allowKeyConversionToObject,
+      _singleShard
     );
     c->clients() = clients();
 
     return cloneHelper(std::move(c), withDependencies, withProperties);
   }
-  
+
   /// @brief getVariablesUsedHere, returning a vector
   std::vector<Variable const*> getVariablesUsedHere() const override final;
 
@@ -266,7 +269,7 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
   void alternativeVariable(Variable const* variable) {
     _alternativeVariable = variable;
   }
-  
+
   /// @brief set createKeys
   void setCreateKeys(bool b) { _createKeys = b; }
 
@@ -275,6 +278,8 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
 
   /// @brief set _allowSpecifiedKeys
   void setAllowSpecifiedKeys(bool b) { _allowSpecifiedKeys = b; }
+
+  bool singleShard() { return _singleShard; }
 
  private:
   /// @brief the variable we must inspect to know where to distribute
@@ -292,6 +297,9 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
 
   /// @brief allow specified keys in input even in the non-default sharding case
   bool _allowSpecifiedKeys;
+
+  /// @brief signals that the node can be optimized away by restrict-to-single-shard rule
+  bool _singleShard;
 };
 
 /// @brief class GatherNode
