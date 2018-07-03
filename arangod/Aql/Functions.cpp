@@ -7023,3 +7023,7 @@ AqlValue Functions::Fulltext(arangodb::aql::Query* query, transaction::Methods*,
     ::registerError(query,"FULLTEXT",TRI_ERROR_NOT_IMPLEMENTED);
     return AqlValue(AqlValueHintNull());
 }
+
+
+
+
