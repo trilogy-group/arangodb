@@ -3161,7 +3161,7 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
   for (ExecutionNode* subqueryNode : subqueryNodes) {
     SubqueryNode* snode = nullptr;
     ExecutionNode* root = nullptr; //only used for asserts
-    bool hasFound = false;
+
     if (subqueryNode == plan->root()) {
       snode = nullptr;
       root = plan->root();
@@ -3169,12 +3169,15 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
       snode = ExecutionNode::castTo<SubqueryNode*>(subqueryNode);
       root = snode->getSubquery();
     }
-    ExecutionNode* node = root;
-    TRI_ASSERT(node != nullptr);
+    ExecutionNode* cnode = root;
+    TRI_ASSERT(cnode != nullptr);
 
-    while (node != nullptr) {
-      // loop until we find a modification node or the end of the plan
-      auto nodeType = node->getType();
+    SmallVector<ExecutionNode*>::allocator_type::arena_type b;
+    SmallVector<ExecutionNode*> nodes{b};
+
+    while (cnode != nullptr) {
+      // loop until we found all modification nodes or the end of the plan
+      auto nodeType = cnode->getType();
 
       // check if there is a node type that needs distribution
       if (nodeType == ExecutionNode::INSERT ||
@@ -3183,236 +3186,238 @@ void arangodb::aql::distributeInClusterRule(Optimizer* opt,
           nodeType == ExecutionNode::REPLACE ||
           nodeType == ExecutionNode::UPSERT) {
         // found a node!
-        hasFound = true;
-        break;
+        TRI_ASSERT(cnode != nullptr);
+        nodes.push_back(cnode);
       }
 
       // there is nothing above us
-      if (!node->hasDependency()) {
+      if (!cnode->hasDependency()) {
         // reached the end
         break;
       }
 
       //go further up the tree
-      node = node->getFirstDependency();
+      cnode = cnode->getFirstDependency();
     }
 
-    if (!hasFound){
-      continue;
-    }
+    std::size_t count = nodes.size() + 1; // we add a dummy element so that we are able to subtract 1
+                                          // at the beginning of the loop. Otherwise the `--count` would
 
-    TRI_ASSERT(node != nullptr);
-    if (node == nullptr) {
-      THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
-    }
+    for(auto* node : nodes) {
+      TRI_ASSERT(node != nullptr);
+      --count;
+      if (node == nullptr) {
+        THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
+      }
 
-    bool singleShard = false;
-    if (node->getType() != EN::UPSERT &&
-        !node->isInInnerLoop() &&
-        !getSingleShardId(plan.get(), node, ExecutionNode::castTo<ModificationNode const*>(node)->collection()).empty()) {
-      // no need to insert a DistributeNode for a single operation that is restricted to a single shard
-      singleShard = true;
-    }
+      bool singleShard = false;
+      if (node->getType() != EN::UPSERT &&
+          !node->isInInnerLoop() &&
+          !getSingleShardId(plan.get(), node, ExecutionNode::castTo<ModificationNode const*>(node)->collection()).empty()) {
+        // no need to insert a DistributeNode for a single operation that is restricted to a single shard
+        singleShard = true;
+      }
 
-    ExecutionNode* originalParent = nullptr;
-    if (node->hasParent()) {
-      auto const& parents = node->getParents();
-      originalParent = parents[0];
-      TRI_ASSERT(originalParent != nullptr);
-      TRI_ASSERT(node != root);
-    } else {
-      TRI_ASSERT(node == root);
-    }
+      ExecutionNode* originalParent = nullptr;
+      if (node->hasParent()) {
+        auto const& parents = node->getParents();
+        originalParent = parents[0];
+        TRI_ASSERT(originalParent != nullptr);
+        TRI_ASSERT(node != root);
+      } else {
+        TRI_ASSERT(node == root);
+      }
 
-    // when we get here, we have found a matching data-modification node!
-    auto const nodeType = node->getType();
+      // when we get here, we have found a matching data-modification node!
+      auto const nodeType = node->getType();
 
-    TRI_ASSERT(nodeType == ExecutionNode::INSERT ||
-               nodeType == ExecutionNode::REMOVE ||
-               nodeType == ExecutionNode::UPDATE ||
-               nodeType == ExecutionNode::REPLACE ||
-               nodeType == ExecutionNode::UPSERT);
+      TRI_ASSERT(nodeType == ExecutionNode::INSERT ||
+                 nodeType == ExecutionNode::REMOVE ||
+                 nodeType == ExecutionNode::UPDATE ||
+                 nodeType == ExecutionNode::REPLACE ||
+                 nodeType == ExecutionNode::UPSERT);
 
-    Collection const* collection =
-        ExecutionNode::castTo<ModificationNode*>(node)->collection();
+      Collection const* collection =
+          ExecutionNode::castTo<ModificationNode*>(node)->collection();
 
 #ifdef USE_ENTERPRISE
-    auto ci = ClusterInfo::instance();
-    auto collInfo =
-        ci->getCollection(collection->vocbase()->name(), collection->name());
-    // Throws if collection is not found!
-    if (collInfo->isSmart() && collInfo->type() == TRI_COL_TYPE_EDGE) {
-      distributeInClusterRuleSmartEdgeCollection(
-          plan.get(), snode, node, originalParent, singleShard, wasModified);
-      continue;
-    }
-#endif
-    bool const defaultSharding = collection->usesDefaultSharding();
-
-    if (nodeType == ExecutionNode::REMOVE ||
-        nodeType == ExecutionNode::UPDATE) {
-      if (!defaultSharding) {
-        // We have to use a ScatterNode.
+      auto ci = ClusterInfo::instance();
+      auto collInfo =
+          ci->getCollection(collection->vocbase()->name(), collection->name());
+      // Throws if collection is not found!
+      if (collInfo->isSmart() && collInfo->type() == TRI_COL_TYPE_EDGE) {
+        distributeInClusterRuleSmartEdgeCollection(
+            plan.get(), snode, node, originalParent, singleShard ? count : 0, wasModified);
         continue;
       }
-    }
+#endif
+      bool const defaultSharding = collection->usesDefaultSharding();
 
-    // In the INSERT and REPLACE cases we use a DistributeNode...
+      if (nodeType == ExecutionNode::REMOVE ||
+          nodeType == ExecutionNode::UPDATE) {
+        if (!defaultSharding) {
+          // We have to use a ScatterNode.
+          continue;
+        }
+      }
 
-    TRI_ASSERT(node->hasDependency());
-    auto const& deps = node->getDependencies();
+      // In the INSERT and REPLACE cases we use a DistributeNode...
 
-    bool haveAdjusted = false;
-    if (originalParent != nullptr) {
-      // nodes below removed node
-      originalParent->removeDependency(node);
-      plan->unlinkNode(node, true);
-      if (snode) {
-        if (snode->getSubquery() == node) {
-          snode->setSubquery(originalParent, true);
+      TRI_ASSERT(node->hasDependency());
+      auto const& deps = node->getDependencies();
+
+      bool haveAdjusted = false;
+      if (originalParent != nullptr) {
+        // nodes below removed node
+        originalParent->removeDependency(node);
+        plan->unlinkNode(node, true);
+        if (snode) {
+          if (snode->getSubquery() == node) {
+            snode->setSubquery(originalParent, true);
+            haveAdjusted = true;
+          }
+        }
+      } else {
+        // no nodes below unlinked node
+        plan->unlinkNode(node, true);
+        if (snode) {
+          snode->setSubquery(deps[0], true);
           haveAdjusted = true;
+        } else {
+          plan->root(deps[0], true);
         }
       }
-    } else {
-      // no nodes below unlinked node
-      plan->unlinkNode(node, true);
-      if (snode) {
-        snode->setSubquery(deps[0], true);
-        haveAdjusted = true;
-      } else {
-        plan->root(deps[0], true);
-      }
-    }
 
-    // extract database from plan node
-    TRI_vocbase_t* vocbase = ExecutionNode::castTo<ModificationNode*>(node)->vocbase();
+      // extract database from plan node
+      TRI_vocbase_t* vocbase = ExecutionNode::castTo<ModificationNode*>(node)->vocbase();
 
-    // insert a distribute node
-    ExecutionNode* distNode = nullptr;
-    Variable const* inputVariable;
-    if (nodeType == ExecutionNode::INSERT ||
-        nodeType == ExecutionNode::REMOVE) {
-      TRI_ASSERT(node->getVariablesUsedHere().size() == 1);
+      // insert a distribute node
+      ExecutionNode* distNode = nullptr;
+      Variable const* inputVariable;
+      if (nodeType == ExecutionNode::INSERT ||
+          nodeType == ExecutionNode::REMOVE) {
+        TRI_ASSERT(node->getVariablesUsedHere().size() == 1);
 
-      // in case of an INSERT, the DistributeNode is responsible for generating
-      // keys if none present
-      bool const createKeys = (nodeType == ExecutionNode::INSERT);
-      inputVariable = node->getVariablesUsedHere()[0];
-      distNode = new DistributeNode(
-        plan.get(),
-        plan->nextId(),
-        collection,
-        inputVariable,
-        inputVariable,
-        createKeys,
-        true /* allowKeyConversionToObject*/,
-        singleShard
-      );
-    } else if (nodeType == ExecutionNode::REPLACE) {
-      std::vector<Variable const*> v = node->getVariablesUsedHere();
-      if (defaultSharding && v.size() > 1) {
-        // We only look into _inKeyVariable
-        inputVariable = v[1];
-      } else {
-        // We only look into _inDocVariable
-        inputVariable = v[0];
-      }
-      distNode = new DistributeNode(
-        plan.get(),
-        plan->nextId(),
-        collection,
-        inputVariable,
-        inputVariable,
-        false,
-        v.size() > 1,
-        singleShard
-      );
-    } else if (nodeType == ExecutionNode::UPDATE) {
-      std::vector<Variable const*> v = node->getVariablesUsedHere();
-      if (v.size() > 1) {
-        // If there is a key variable:
-        inputVariable = v[1];
-        // This is the _inKeyVariable! This works, since we use a ScatterNode
-        // for non-default-sharding attributes.
-      } else {
-        // was only UPDATE <doc> IN <collection>
-        inputVariable = v[0];
-      }
-      distNode = new DistributeNode(
-        plan.get(),
-        plan->nextId(),
-        collection,
-        inputVariable,
-        inputVariable,
-        false,
-        v.size() > 1,
-        singleShard
-      );
-    } else if (nodeType == ExecutionNode::UPSERT) {
-      // an UPSERT node has two input variables!
-      std::vector<Variable const*> v(node->getVariablesUsedHere());
-      TRI_ASSERT(v.size() >= 2);
-
-      auto d = new DistributeNode(
-        plan.get(), plan->nextId(), collection, v[0], v[1], true, true, singleShard
-      );
-      d->setAllowSpecifiedKeys(true);
-      distNode = ExecutionNode::castTo<ExecutionNode*>(d);
-    } else {
-      TRI_ASSERT(false);
-      THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
-    }
-
-    TRI_ASSERT(distNode != nullptr);
-
-    plan->registerNode(distNode);
-    distNode->addDependency(deps[0]);
-
-    // insert a remote node
-    ExecutionNode* remoteNode = new RemoteNode(
-      plan.get(), plan->nextId(), vocbase, "", "", ""
-    );
-    plan->registerNode(remoteNode);
-    remoteNode->addDependency(distNode);
-
-    // re-link with the remote node
-    node->addDependency(remoteNode);
-
-    // insert another remote node
-    remoteNode = new RemoteNode(
-      plan.get(), plan->nextId(), vocbase, "", "", ""
-    );
-    plan->registerNode(remoteNode);
-    remoteNode->addDependency(node);
-
-    // insert a gather node
-    auto const sortMode = GatherNode::evaluateSortMode(
-      collection->numberOfShards()
-    );
-    auto* gatherNode = new GatherNode(
-      plan.get(),
-      plan->nextId(),
-      sortMode
-    );
-    plan->registerNode(gatherNode);
-    gatherNode->addDependency(remoteNode);
-
-    if (originalParent != nullptr) {
-      // we did not replace the root node
-      TRI_ASSERT(gatherNode);
-      originalParent->addDependency(gatherNode);
-    } else {
-      // we replaced the root node, set a new root node
-      if (snode) {
-        if (snode->getSubquery() == node || haveAdjusted) {
-          snode->setSubquery(gatherNode, true);
+        // in case of an INSERT, the DistributeNode is responsible for generating
+        // keys if none present
+        bool const createKeys = (nodeType == ExecutionNode::INSERT);
+        inputVariable = node->getVariablesUsedHere()[0];
+        distNode = new DistributeNode(
+          plan.get(),
+          plan->nextId(),
+          collection,
+          inputVariable,
+          inputVariable,
+          createKeys,
+          true /* allowKeyConversionToObject*/,
+          singleShard ? count : 0
+        );
+      } else if (nodeType == ExecutionNode::REPLACE) {
+        std::vector<Variable const*> v = node->getVariablesUsedHere();
+        if (defaultSharding && v.size() > 1) {
+          // We only look into _inKeyVariable
+          inputVariable = v[1];
+        } else {
+          // We only look into _inDocVariable
+          inputVariable = v[0];
         }
+        distNode = new DistributeNode(
+          plan.get(),
+          plan->nextId(),
+          collection,
+          inputVariable,
+          inputVariable,
+          false,
+          v.size() > 1,
+          singleShard ? count : 0
+        );
+      } else if (nodeType == ExecutionNode::UPDATE) {
+        std::vector<Variable const*> v = node->getVariablesUsedHere();
+        if (v.size() > 1) {
+          // If there is a key variable:
+          inputVariable = v[1];
+          // This is the _inKeyVariable! This works, since we use a ScatterNode
+          // for non-default-sharding attributes.
+        } else {
+          // was only UPDATE <doc> IN <collection>
+          inputVariable = v[0];
+        }
+        distNode = new DistributeNode(
+          plan.get(),
+          plan->nextId(),
+          collection,
+          inputVariable,
+          inputVariable,
+          false,
+          v.size() > 1,
+          singleShard ? count : 0
+        );
+      } else if (nodeType == ExecutionNode::UPSERT) {
+        // an UPSERT node has two input variables!
+        std::vector<Variable const*> v(node->getVariablesUsedHere());
+        TRI_ASSERT(v.size() >= 2);
+
+        auto d = new DistributeNode(
+          plan.get(), plan->nextId(), collection, v[0], v[1], true, true, singleShard ? count : 0
+        );
+        d->setAllowSpecifiedKeys(true);
+        distNode = ExecutionNode::castTo<ExecutionNode*>(d);
       } else {
-        plan->root(gatherNode, true);
+        TRI_ASSERT(false);
+        THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "logic error");
       }
-    }
-    wasModified = true;
-  } // for end nodes in plan
+
+      TRI_ASSERT(distNode != nullptr);
+
+      plan->registerNode(distNode);
+      distNode->addDependency(deps[0]);
+
+      // insert a remote node
+      ExecutionNode* remoteNode = new RemoteNode(
+        plan.get(), plan->nextId(), vocbase, "", "", ""
+      );
+      plan->registerNode(remoteNode);
+      remoteNode->addDependency(distNode);
+
+      // re-link with the remote node
+      node->addDependency(remoteNode);
+
+      // insert another remote node
+      remoteNode = new RemoteNode(
+        plan.get(), plan->nextId(), vocbase, "", "", ""
+      );
+      plan->registerNode(remoteNode);
+      remoteNode->addDependency(node);
+
+      // insert a gather node
+      auto const sortMode = GatherNode::evaluateSortMode(
+        collection->numberOfShards()
+      );
+      auto* gatherNode = new GatherNode(
+        plan.get(),
+        plan->nextId(),
+        sortMode
+      );
+      plan->registerNode(gatherNode);
+      gatherNode->addDependency(remoteNode);
+
+      if (originalParent != nullptr) {
+        // we did not replace the root node
+        TRI_ASSERT(gatherNode);
+        originalParent->addDependency(gatherNode);
+      } else {
+        // we replaced the root node, set a new root node
+        if (snode) {
+          if (snode->getSubquery() == node || haveAdjusted) {
+            snode->setSubquery(gatherNode, true);
+          }
+        } else {
+          plan->root(gatherNode, true);
+        }
+      }
+      wasModified = true;
+    } // for modification node in subquery
+  } // for subquery in subqueries
   opt->addPlan(std::move(plan), rule, wasModified);
 }
 
@@ -4121,7 +4126,7 @@ void arangodb::aql::restrictToSingleShardRule(
     while (current != nullptr) {
       auto const currentType = current->getType();
 
-      ExecutionNode* distributionNode = nullptr;
+      DistributeNode* distributionNode = nullptr;
       ExecutionNode* remoteNode = nullptr;
 
       // don't do this if we are already distributing and the node is not flagged to be replaced by this rule
@@ -4133,7 +4138,7 @@ void arangodb::aql::restrictToSingleShardRule(
           if(!(static_cast<DistributeNode*>(depdep)->singleShard())) {
             break;
           } else {
-            distributionNode = depdep;
+            distributionNode = static_cast<DistributeNode*>(depdep);
           }
         }
       }
@@ -4142,7 +4147,8 @@ void arangodb::aql::restrictToSingleShardRule(
         if(distributionNode){
           LOG_DEVEL << "unlink";
           plan->unlinkNode(distributionNode);
-          if(remoteNode){
+          LOG_DEVEL << "singleshard # " << distributionNode->singleShard();
+          if(remoteNode && distributionNode->singleShard() <= 1){
             LOG_DEVEL << "unlink remote";
             plan->unlinkNode(remoteNode);
           }

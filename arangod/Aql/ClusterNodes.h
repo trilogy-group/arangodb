@@ -210,7 +210,7 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
       Variable const* alternativeVariable,
       bool createKeys,
       bool allowKeyConversionToObject,
-      bool singleShard)
+      std::size_t singleShard)
     : ScatterNode(plan, id),
       CollectionAccessingNode(collection),
       _variable(variable),
@@ -279,7 +279,7 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
   /// @brief set _allowSpecifiedKeys
   void setAllowSpecifiedKeys(bool b) { _allowSpecifiedKeys = b; }
 
-  bool singleShard() { return _singleShard; }
+  size_t singleShard() { return _singleShard; }
 
  private:
   /// @brief the variable we must inspect to know where to distribute
@@ -299,7 +299,7 @@ class DistributeNode final : public ScatterNode, public CollectionAccessingNode 
   bool _allowSpecifiedKeys;
 
   /// @brief signals that the node can be optimized away by restrict-to-single-shard rule
-  bool _singleShard;
+  std::size_t _singleShard;
 };
 
 /// @brief class GatherNode
