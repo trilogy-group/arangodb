@@ -140,6 +140,7 @@ void distributeInClusterRuleSmartEdgeCollection(
     SubqueryNode* snode,
     ExecutionNode* node,
     ExecutionNode* originalParent,
+    std::size_t singleshard,
     bool& wasModified);
 
 /// @brief remove scatter/gather and remote nodes for satellite collections
