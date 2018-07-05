@@ -798,10 +798,12 @@ void RestAqlHandler::handleUseQuery(std::string const& operation, Query* query,
           auto block = static_cast<BlockWithClients*>(query->engine()->root());
           if (block->getPlanNode()->getType() != ExecutionNode::SCATTER &&
               block->getPlanNode()->getType() != ExecutionNode::DISTRIBUTE) {
-            THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL,
-                                           "unexpected node type");
+            // this was added for the restrict-to-single shard rule
+            items.reset(query->engine()->getSome(atMost));
+          } else {
+            //THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_INTERNAL, "unexpected node type");
+            items.reset(block->getSomeForShard(atMost, shardId));
           }
-          items.reset(block->getSomeForShard(atMost, shardId));
         }
         if (items.get() == nullptr) {
           answerBuilder.add("exhausted", VPackValue(true));
