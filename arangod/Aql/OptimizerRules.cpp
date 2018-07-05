@@ -4116,12 +4116,14 @@ void arangodb::aql::restrictToSingleShardRule(
   }
 
   SmallVector<ExecutionNode*>::allocator_type::arena_type a;
-  SmallVector<ExecutionNode*> nodes{a};
-  plan->findNodesOfType(nodes, EN::REMOTE, true);
+  SmallVector<ExecutionNode*> remotes{a};
+  plan->findNodesOfType(remotes, EN::REMOTE, true);
 
-  for (auto& node : nodes) {
-    TRI_ASSERT(node->getType() == ExecutionNode::REMOTE);
-    ExecutionNode* current = node->getFirstDependency();
+  std::size_t count = 0;
+  for (auto& remote : remotes) {
+    count++;
+    TRI_ASSERT(remote->getType() == ExecutionNode::REMOTE);
+    ExecutionNode* current = remote->getFirstDependency();
 
     while (current != nullptr) {
       auto const currentType = current->getType();
@@ -4135,21 +4137,20 @@ void arangodb::aql::restrictToSingleShardRule(
         remoteNode = deps[0];
         auto* depdep = remoteNode->getFirstDependency();
         if(depdep->getType() == ExecutionNode::DISTRIBUTE){
-          if(!(static_cast<DistributeNode*>(depdep)->singleShard())) {
+          distributionNode = static_cast<DistributeNode*>(depdep);
+
+          if(!(distributionNode->singleShard() > 0)) {
+            // we are not allowed to optimize
+            distributionNode = nullptr;
             break;
-          } else {
-            distributionNode = static_cast<DistributeNode*>(depdep);
-          }
+          };
         }
       }
 
       auto unlink = [&](){
         if(distributionNode){
-          LOG_DEVEL << "unlink";
           plan->unlinkNode(distributionNode);
-          LOG_DEVEL << "singleshard # " << distributionNode->singleShard();
           if(remoteNode && distributionNode->singleShard() <= 1){
-            LOG_DEVEL << "unlink remote";
             plan->unlinkNode(remoteNode);
           }
         }
