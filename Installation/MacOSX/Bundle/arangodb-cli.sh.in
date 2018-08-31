@@ -68,7 +68,7 @@ fi
 if test ! -f "${HOME}@INC_CPACK_ARANGO_DATA_DIR@/SERVER" -a ! -f "${HOME}@INC_CPACK_ARANGO_DATA_DIR@/ENGINE"; then
     STORAGE_ENGINE=$(
         /usr/bin/osascript <<-EOF
-set issueList to {"auto", "mmfiles", "rocksdb"}
+set issueList to {"auto", "rocksdb", "mmfiles"}
 set selectedIssue to {choose from list issueList}
 return selectedIssue
 EOF
