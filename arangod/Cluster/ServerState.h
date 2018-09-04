@@ -238,13 +238,13 @@ class ServerState {
 
   bool isFoxxmaster();
 
-  std::string const& getFoxxmaster();
+  std::string getFoxxmaster() const;
 
   void setFoxxmaster(std::string const&);
 
   void setFoxxmasterQueueupdate(bool);
 
-  bool getFoxxmasterQueueupdate();
+  bool getFoxxmasterQueueupdate() const;
 
   std::string getPersistedId();
   bool hasPersistedId();
@@ -274,7 +274,7 @@ class ServerState {
   /// @brief register shortname for an id
   bool registerShortName(std::string const& id, const RoleEnum&);
   
-private:
+ private:
   
   /// @brief server role
   std::atomic<RoleEnum> _role;
@@ -303,6 +303,9 @@ private:
   /// @brief whether or not the cluster was initialized
   bool _initialized;
 
+  /// @brief r/w lock for foxxmaster
+  mutable arangodb::basics::ReadWriteSpinLock _foxxmasterLock;
+  
   std::string _foxxmaster;
 
   bool _foxxmasterQueueupdate;

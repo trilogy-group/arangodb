@@ -48,7 +48,7 @@ namespace velocypack {
 class Builder;
 class Slice;
 }
-
+    
 // -----------------------------------------------------------------------------
 // --SECTION--                                           AgencyConnectionOptions
 // -----------------------------------------------------------------------------
@@ -345,52 +345,22 @@ public:
 
 struct AgencyWriteTransaction : public AgencyTransaction {
 
-public:
+ public:
+  explicit AgencyWriteTransaction(AgencyOperation const& op);
   
-  explicit AgencyWriteTransaction(AgencyOperation const& operation) :
-    clientId(to_string(boost::uuids::random_generator()())) {
-    operations.push_back(operation);
-  }
+  explicit AgencyWriteTransaction(std::vector<AgencyOperation> const& ops);
   
-  explicit AgencyWriteTransaction (std::vector<AgencyOperation> const& _opers) :
-    operations(_opers),
-    clientId(to_string(boost::uuids::random_generator()())) {}
+  AgencyWriteTransaction(AgencyOperation const& op,
+                         AgencyPrecondition const& prec);
   
-  AgencyWriteTransaction(AgencyOperation const& operation,
-                         AgencyPrecondition const& precondition) :
-    clientId(to_string(boost::uuids::random_generator()())) {
-    operations.push_back(operation);
-    preconditions.push_back(precondition);
-  }
-  
-  AgencyWriteTransaction(std::vector<AgencyOperation> const& _operations,
-                         AgencyPrecondition const& precondition) :
-    clientId(to_string(boost::uuids::random_generator()())) {
-    for (auto const& op : _operations) {
-      operations.push_back(op);
-    }
-    preconditions.push_back(precondition);
-  }
+  AgencyWriteTransaction(std::vector<AgencyOperation> const& ops,
+                         AgencyPrecondition const& prec);
 
-  AgencyWriteTransaction(AgencyOperation const& operation,
-                         std::vector<AgencyPrecondition> const& precs) :
-    clientId(to_string(boost::uuids::random_generator()())) {
-    operations.push_back(operation);
-    for (auto const& pre : precs) {
-      preconditions.push_back(pre);
-    }
-  }
+  AgencyWriteTransaction(AgencyOperation const& op,
+                         std::vector<AgencyPrecondition> const& precs);
 
-  AgencyWriteTransaction(std::vector<AgencyOperation> const& opers,
-                         std::vector<AgencyPrecondition> const& precs) :
-    clientId(to_string(boost::uuids::random_generator()())) {
-    for (auto const& op : opers) {
-      operations.push_back(op);
-    }
-    for (auto const& pre : precs) {
-      preconditions.push_back(pre);
-    }
-  }
+  AgencyWriteTransaction(std::vector<AgencyOperation> const& ops,
+                         std::vector<AgencyPrecondition> const& precs);
 
   AgencyWriteTransaction() = default;
 

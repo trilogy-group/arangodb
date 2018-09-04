@@ -61,6 +61,24 @@ using namespace arangodb::application_features;
 using namespace arangodb::httpclient;
 using namespace arangodb::rest;
 
+namespace {
+  
+static arangodb::Mutex uuidMutex;
+static boost::uuids::random_generator uuidGenerator;
+
+std::string generateClientId() {
+  boost::uuids::uuid uuid;
+  
+  {
+    MUTEX_LOCKER(locker, uuidMutex);
+    uuid = uuidGenerator();
+  }
+  return boost::uuids::to_string(uuid);
+}
+
+} // namespace
+
+
 #ifdef DEBUG_SYNC_REPLICATION
 static std::atomic<uint64_t> debugUniqId(1);
 bool AgencyComm::syncReplDebug = false;
@@ -68,8 +86,7 @@ bool AgencyComm::syncReplDebug = false;
 
 static void addEmptyVPackObject(std::string const& name,
                                 VPackBuilder& builder) {
-  builder.add(VPackValue(name));
-  VPackObjectBuilder c(&builder);
+  builder.add(name, VPackSlice::emptyObjectSlice());
 }
 
 const std::vector<std::string> AgencyTransaction::TypeUrl(
@@ -219,6 +236,58 @@ std::string AgencyTransaction::toJson() const {
 // -----------------------------------------------------------------------------
 // --SECTION--                                            AgencyWriteTransaction
 // -----------------------------------------------------------------------------
+  
+AgencyWriteTransaction::AgencyWriteTransaction(AgencyOperation const& op) 
+    : clientId(::generateClientId()) {
+  operations.push_back(op);
+}
+  
+AgencyWriteTransaction::AgencyWriteTransaction(std::vector<AgencyOperation> const& ops) 
+    : operations(ops),
+      clientId(::generateClientId()) {}
+  
+AgencyWriteTransaction::AgencyWriteTransaction(AgencyOperation const& op,
+                                               AgencyPrecondition const& prec)
+    : clientId(::generateClientId()) {
+  operations.push_back(op);
+  preconditions.push_back(prec);
+}
+  
+AgencyWriteTransaction::AgencyWriteTransaction(std::vector<AgencyOperation> const& ops,
+                                               AgencyPrecondition const& prec) 
+    : clientId(::generateClientId()) {
+  operations.reserve(ops.size());
+  for (auto const& op : ops) {
+    operations.push_back(op);
+  }
+
+  preconditions.push_back(prec);
+}
+
+AgencyWriteTransaction::AgencyWriteTransaction(AgencyOperation const& op,
+                                               std::vector<AgencyPrecondition> const& precs) 
+    : clientId(::generateClientId()) {
+  operations.push_back(op);
+  
+  preconditions.reserve(precs.size());
+  for (auto const& prec : precs) {
+    preconditions.push_back(prec);
+  }
+}
+
+AgencyWriteTransaction::AgencyWriteTransaction(std::vector<AgencyOperation> const& ops,
+                                               std::vector<AgencyPrecondition> const& precs) 
+    : clientId(::generateClientId()) {
+  operations.reserve(ops.size());
+  for (auto const& op : ops) {
+    operations.push_back(op);
+  }
+
+  preconditions.reserve(precs.size());
+  for (auto const& prec : precs) {
+    preconditions.push_back(prec);
+  }
+}
 
 void AgencyWriteTransaction::toVelocyPack(VPackBuilder& builder) const {
   VPackArrayBuilder guard(&builder);

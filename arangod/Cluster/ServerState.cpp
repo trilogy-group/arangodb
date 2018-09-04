@@ -760,18 +760,27 @@ bool ServerState::isFoxxmaster() {
   return /*!isRunningInCluster() ||*/ _foxxmaster == getId();
 }
 
-std::string const& ServerState::getFoxxmaster() { return _foxxmaster; }
+std::string ServerState::getFoxxmaster() const { 
+  READ_LOCKER(locker, _foxxmasterLock);
+  return _foxxmaster; 
+}
 
 void ServerState::setFoxxmaster(std::string const& foxxmaster) {
+  WRITE_LOCKER(locker, _foxxmasterLock);
+
   if (_foxxmaster != foxxmaster) {
     setFoxxmasterQueueupdate(true);
     _foxxmaster = foxxmaster;
   }
 }
 
-bool ServerState::getFoxxmasterQueueupdate() { return _foxxmasterQueueupdate; }
+bool ServerState::getFoxxmasterQueueupdate() const { 
+  READ_LOCKER(locker, _foxxmasterLock);
+  return _foxxmasterQueueupdate; 
+}
 
 void ServerState::setFoxxmasterQueueupdate(bool value) {
+  WRITE_LOCKER(locker, _foxxmasterLock);
   _foxxmasterQueueupdate = value;
 }
 
