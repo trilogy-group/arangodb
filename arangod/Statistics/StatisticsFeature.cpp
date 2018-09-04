@@ -116,13 +116,16 @@ class arangodb::StatisticsThread final : public Thread {
 // --SECTION--                                                 StatisticsFeature
 // -----------------------------------------------------------------------------
 
+// mutex needed to protect common statistics objects (requests and connection statistics)
+Mutex StatisticsFeature::_dataLock;
+
 StatisticsFeature* StatisticsFeature::STATISTICS = nullptr;
 
 StatisticsFeature::StatisticsFeature(
     application_features::ApplicationServer& server
 )
     : ApplicationFeature(server, "Statistics"),
-      _statistics(true),
+      _statisticsEnabled(true),
       _descriptions(new stats::Descriptions()) {
   startsAfter("AQLPhase");
   setOptional(true);
@@ -136,12 +139,12 @@ void StatisticsFeature::collectOptions(
 
   options->addHiddenOption("--server.statistics",
                            "turn statistics gathering on or off",
-                           new BooleanParameter(&_statistics));
+                           new BooleanParameter(&_statisticsEnabled));
 }
 
 void StatisticsFeature::validateOptions(
     std::shared_ptr<ProgramOptions>) {
-  if (!_statistics) {
+  if (!_statisticsEnabled) {
     // turn ourselves off
     disable();
   }

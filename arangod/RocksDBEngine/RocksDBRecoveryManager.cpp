@@ -114,7 +114,9 @@ void RocksDBRecoveryManager::runRecovery() {
   }
 }
 
-bool RocksDBRecoveryManager::inRecovery() const { return _inRecovery; }
+bool RocksDBRecoveryManager::inRecovery() const { 
+  return _inRecovery.load(); 
+}
 
 class WBReader final : public rocksdb::WriteBatch::Handler {
  public:

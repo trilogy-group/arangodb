@@ -23,6 +23,7 @@
 
 #include "RequestStatistics.h"
 #include "Basics/MutexLocker.h"
+#include "Statistics/StatisticsFeature.h"
 #include "Logger/Logger.h"
 
 #include <iomanip>
@@ -33,8 +34,6 @@ using namespace arangodb::basics;
 // -----------------------------------------------------------------------------
 // --SECTION--                                                    static members
 // -----------------------------------------------------------------------------
-
-arangodb::Mutex RequestStatistics::_dataLock;
 
 std::unique_ptr<RequestStatistics[]> RequestStatistics::_statisticsBuffer;
 
@@ -107,7 +106,7 @@ void RequestStatistics::process(RequestStatistics* statistics) {
   TRI_ASSERT(statistics != nullptr);
 
   {
-    MUTEX_LOCKER(mutexLocker, _dataLock);
+    MUTEX_LOCKER(mutexLocker, StatisticsFeature::_dataLock);
 
     TRI_TotalRequestsStatistics.incCounter();
 
@@ -200,8 +199,6 @@ void RequestStatistics::fill(StatisticsDistribution& totalTime,
     // all the below objects may be deleted if we don't have statistics enabled
     return;
   }
-
-  MUTEX_LOCKER(mutexLocker, _dataLock);
 
   totalTime = TRI_TotalTimeDistributionStatistics;
   requestTime = TRI_RequestTimeDistributionStatistics;

@@ -25,6 +25,7 @@
 
 #include "Basics/MutexLocker.h"
 #include "Rest/CommonDefines.h"
+#include "Statistics/StatisticsFeature.h"
 
 using namespace arangodb;
 using namespace arangodb::basics;
@@ -32,8 +33,6 @@ using namespace arangodb::basics;
 // -----------------------------------------------------------------------------
 // --SECTION--                                                    static members
 // -----------------------------------------------------------------------------
-
-Mutex ConnectionStatistics::_dataLock;
 
 std::unique_ptr<ConnectionStatistics[]> ConnectionStatistics::_statisticsBuffer;
 
@@ -88,7 +87,7 @@ void ConnectionStatistics::fill(StatisticsCounter& httpConnections,
     return;
   }
 
-  MUTEX_LOCKER(mutexLocker, _dataLock);
+  MUTEX_LOCKER(mutexLocker, StatisticsFeature::_dataLock);
 
   httpConnections = TRI_HttpConnectionsStatistics;
   totalRequests = TRI_TotalRequestsStatistics;
@@ -103,7 +102,7 @@ void ConnectionStatistics::fill(StatisticsCounter& httpConnections,
 
 void ConnectionStatistics::release() {
   {
-    MUTEX_LOCKER(mutexLocker, _dataLock);
+    MUTEX_LOCKER(mutexLocker, StatisticsFeature::_dataLock);
 
     if (_http) {
       TRI_HttpConnectionsStatistics.decCounter();

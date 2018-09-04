@@ -26,7 +26,6 @@
 
 #include "Basics/Common.h"
 
-#include "Basics/Mutex.h"
 #include "Rest/CommonDefines.h"
 #include "Statistics/StatisticsFeature.h"
 #include "Statistics/figures.h"
@@ -159,8 +158,6 @@ class RequestStatistics {
 
  private:
   static size_t const QUEUE_SIZE = 64 * 1024 - 2; // current (1.62) boost maximum
-
-  static arangodb::Mutex _dataLock;
 
   static std::unique_ptr<RequestStatistics[]> _statisticsBuffer;
 

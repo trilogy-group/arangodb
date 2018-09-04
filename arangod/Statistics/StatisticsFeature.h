@@ -24,6 +24,7 @@
 #define APPLICATION_FEATURES_STATISTICS_FEATURE_H 1
 
 #include "ApplicationFeatures/ApplicationFeature.h"
+#include "Basics/Mutex.h"
 #include "Basics/Thread.h"
 #include "Statistics/figures.h"
 
@@ -60,7 +61,7 @@ class StatisticsFeature final
     : public application_features::ApplicationFeature {
  public:
   static bool enabled() {
-    return STATISTICS != nullptr && STATISTICS->_statistics;
+    return STATISTICS != nullptr && STATISTICS->_statisticsEnabled;
   }
 
   static double time() { return TRI_microtime(); }
@@ -85,11 +86,15 @@ class StatisticsFeature final
   }
 
  private:
-  bool _statistics;
+  bool _statisticsEnabled;
 
   std::unique_ptr<stats::Descriptions> _descriptions;
   std::unique_ptr<StatisticsThread> _statisticsThread;
   std::unique_ptr<StatisticsWorker> _statisticsWorker;
+
+ public:
+  // mutex needed to protect common statistics objects (requests and connection statistics)
+  static Mutex _dataLock;
 };
 
 }
