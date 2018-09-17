@@ -240,6 +240,11 @@ static OperationResult emptyResult(OperationOptions const& options) {
   return OperationResult(Result(), resultBuilder.steal(), nullptr, options);
 }
 }  // namespace
+  
+std::atomic<uint64_t> transaction::Methods::_nrInserts{0};
+std::atomic<uint64_t> transaction::Methods::_nrUpdates{0};
+std::atomic<uint64_t> transaction::Methods::_nrRemoves{0};
+std::atomic<uint64_t> transaction::Methods::_nrQueries{0};
 
 /*static*/ void transaction::Methods::addDataSourceRegistrationCallback(
     DataSourceRegistrationCallback const& callback
@@ -1653,6 +1658,7 @@ OperationResult transaction::Methods::insertLocal(
 
     auto const needsLock = !isLocked(collection, AccessMode::Type::WRITE);
 
+    ++transaction::Methods::_nrInserts;
     Result res = collection->insert( this, value, documentResult, options
                                    , resultMarkerTick, needsLock, revisionId
                                    );
@@ -2033,10 +2039,12 @@ OperationResult transaction::Methods::modifyLocal(
     TRI_voc_tick_t resultMarkerTick = 0;
 
     if (operation == TRI_VOC_DOCUMENT_OPERATION_REPLACE) {
+      ++transaction::Methods::_nrUpdates;
       res = collection->replace(this, newVal, result, options, resultMarkerTick,
                                 !isLocked(collection, AccessMode::Type::WRITE),
                                 actualRevision, previous);
     } else {
+      ++transaction::Methods::_nrUpdates;
       res = collection->update(this, newVal, result, options, resultMarkerTick,
                                !isLocked(collection, AccessMode::Type::WRITE),
                                actualRevision, previous);
@@ -2349,6 +2357,7 @@ OperationResult transaction::Methods::removeLocal(
 
     TRI_voc_tick_t resultMarkerTick = 0;
 
+    ++transaction::Methods::_nrRemoves;
     Result res = collection->remove(this, value, options, resultMarkerTick,
                                  !isLocked(collection, AccessMode::Type::WRITE),
                                  actualRevision, previous);

@@ -62,6 +62,9 @@ class RestHandlerFactory {
 
   // list of prefix handlers
   std::vector<std::string> _prefixes;
+
+ public:
+  static std::atomic<uint64_t> _handlersCreated;
 };
 }
 }

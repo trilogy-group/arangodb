@@ -630,6 +630,12 @@ class Methods {
     std::string name;
   }
   _collectionCache;
+
+ public:
+  static std::atomic<uint64_t> _nrInserts;
+  static std::atomic<uint64_t> _nrUpdates;
+  static std::atomic<uint64_t> _nrRemoves;
+  static std::atomic<uint64_t> _nrQueries;
 };
 
 }

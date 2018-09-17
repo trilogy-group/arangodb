@@ -35,10 +35,12 @@
 #include "Basics/StringUtils.h"
 #include "Basics/WriteLocker.h"
 #include "Basics/files.h"
+#include "Basics/process-utils.h"
 #include "Cluster/ServerState.h"
 #include "Cluster/TraverserEngineRegistry.h"
 #include "Cluster/v8-cluster.h"
 #include "GeneralServer/AuthenticationFeature.h"
+#include "GeneralServer/RestHandlerFactory.h"
 #include "Logger/Logger.h"
 #include "ProgramOptions/ProgramOptions.h"
 #include "ProgramOptions/Section.h"
@@ -49,6 +51,7 @@
 #include "RestServer/TraverserEngineRegistryFeature.h"
 #include "StorageEngine/EngineSelectorFeature.h"
 #include "StorageEngine/StorageEngine.h"
+#include "Transaction/Methods.h"
 #include "Utils/CollectionNameResolver.h"
 #include "Utils/Events.h"
 #include "Utils/CursorRepository.h"
@@ -81,6 +84,17 @@ void DatabaseManagerThread::run() {
       ApplicationServer::getFeature<DatabaseFeature>("Database");
   auto dealer = ApplicationServer::getFeature<V8DealerFeature>("V8Dealer");
   int cleanupCycles = 0;
+
+double lastUserTime = 0.0;
+double lastSysTime = 0.0;
+int64_t lastNumberThreads = 0; 
+int64_t lastResidentSize = 0;
+int64_t lastVirtualSize = 0;
+int64_t lastNrInserts = 0;
+int64_t lastNrUpdates = 0;
+int64_t lastNrRemoves = 0;
+int64_t lastNrQueries = 0;
+int64_t lastNrHandlers = 0;
 
   StorageEngine* engine = EngineSelectorFeature::ENGINE;
 
@@ -177,6 +191,43 @@ void DatabaseManagerThread::run() {
           // done
           break;
         }
+
+
+if (cleanupCycles == 0) {
+ProcessInfo pi = TRI_ProcessInfoSelf();
+double userTime = double(pi._userTime) / double(pi._scClkTck);
+double sysTime = double(pi._systemTime) / double(pi._scClkTck);
+int64_t numberThreads = pi._numberThreads;
+int64_t residentSize = pi._residentSize;
+int64_t virtualSize = pi._virtualSize;
+int64_t nrInserts = transaction::Methods::_nrInserts;
+int64_t nrUpdates = transaction::Methods::_nrUpdates;
+int64_t nrRemoves = transaction::Methods::_nrRemoves;
+int64_t nrQueries = transaction::Methods::_nrQueries;
+int64_t nrHandlers = rest::RestHandlerFactory::_handlersCreated;
+LOG_TOPIC(INFO, Logger::FIXME) << "process info: cum user: " << userTime << " (Δ" << (userTime - lastUserTime) << ")" 
+                               << ", cum sys: " << sysTime  << " (Δ" << (sysTime - lastSysTime) << ")"
+                               << ", cur threads: " << numberThreads << " (Δ" << (int64_t(numberThreads) - lastNumberThreads) << ")"
+                               << ", cur rss: " << residentSize << " (Δ" << (int64_t(residentSize) - lastResidentSize) << ")"
+                               << ", cur vsz: " << virtualSize << " (Δ" << (int64_t(virtualSize) - lastVirtualSize) << ")"
+                               << ", cur rss%: " << (double(pi._residentSize) * 100.0 / double(TRI_PhysicalMemory)) 
+                               << "%, cum inserts: " << nrInserts << " (Δ" << (int64_t(nrInserts - lastNrInserts)) << ")"
+                               << ", cum updates: " << nrUpdates << " (Δ" << (int64_t(nrUpdates - lastNrUpdates)) << ")"
+                               << ", cum removes: " << nrRemoves << " (Δ" << (int64_t(nrRemoves - lastNrRemoves)) << ")"
+                               << ", cum queries: " << nrQueries << " (Δ" << (int64_t(nrQueries - lastNrQueries)) << ")"
+                               << ", cum handlers: " << nrHandlers << " (Δ" << (int64_t(nrHandlers - lastNrHandlers)) << ")";
+
+lastUserTime = userTime;
+lastSysTime = sysTime; 
+lastNumberThreads = numberThreads;
+lastResidentSize = residentSize;
+lastVirtualSize = virtualSize;
+lastNrInserts = nrInserts;
+lastNrUpdates = nrUpdates;
+lastNrRemoves = nrRemoves;
+lastNrQueries = nrQueries;
+lastNrHandlers = nrHandlers;
+}
 
         std::this_thread::sleep_for(std::chrono::microseconds(waitTime()));
 

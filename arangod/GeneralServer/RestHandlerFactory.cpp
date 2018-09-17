@@ -35,6 +35,8 @@ namespace {
 static std::string const ROOT_PATH = "/";
 }
 
+std::atomic<uint64_t> RestHandlerFactory::_handlersCreated{0};
+
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief creates a new handler
 ////////////////////////////////////////////////////////////////////////////////
@@ -110,6 +112,8 @@ RestHandler* RestHandlerFactory::createHandler(
   req->setPrefix(it->first);
 
   LOG_TOPIC(TRACE, arangodb::Logger::FIXME) << "found handler for path '" << it->first << "'";
+
+  ++_handlersCreated;
   return it->second.first(req.release(), res.release(), it->second.second);
 }
 

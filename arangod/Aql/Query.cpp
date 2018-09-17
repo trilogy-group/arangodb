@@ -153,6 +153,8 @@ Query::Query(
   if (!AqlFeature::lease()) {
     THROW_ARANGO_EXCEPTION(TRI_ERROR_SHUTTING_DOWN);
   }
+  
+  ++transaction::Methods::_nrQueries;
 }
 
 /// @brief creates a query from VelocyPack
@@ -209,6 +211,8 @@ Query::Query(
   if (!AqlFeature::lease()) {
     THROW_ARANGO_EXCEPTION(TRI_ERROR_SHUTTING_DOWN);
   }
+  
+  ++transaction::Methods::_nrQueries;
 }
 
 /// @brief destroys a query
