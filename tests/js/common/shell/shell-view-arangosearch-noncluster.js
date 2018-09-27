@@ -275,7 +275,6 @@ function ViewSuite () {
       db._dropDatabase("testViewDirInFSAfterDatabaseDrop");
 
       assertFalse(fs.exists(indexDirPath));
-      assertFalse(fs.exists(dbPath));
     }
 
   };
