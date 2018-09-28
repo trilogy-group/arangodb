@@ -1106,6 +1106,7 @@ if (MSVC)
   include(generate_product_version)
 endif()
 
+add_subdirectory(Documentation) 
 include(ArangoDBInstall)
 include(frontend/aardvark)
 if (NOT(SKIP_PACKAGING))
@@ -1222,7 +1223,6 @@ add_subdirectory(lib)
 add_subdirectory(arangosh)
 add_subdirectory(arangod)
 
-add_subdirectory(Documentation)
 
 if (USE_CATCH_TESTS)
   add_subdirectory(tests)
