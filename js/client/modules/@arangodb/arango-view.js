@@ -144,7 +144,8 @@ ArangoView.prototype._baseurl = function (suffix) {
 // /////////////////////////////////////////////////////////////////////////////
 
 ArangoView.prototype.toArray = function () {
-  return this.all().toArray();
+  var query = "FOR doc IN " + this.name() + " RETURN doc";
+  return internal.db._query(query).toArray();
 };
 
 // //////////////////////////////////////////////////////////////////////////////
