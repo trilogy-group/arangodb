@@ -592,6 +592,7 @@ if (USE_ENTERPRISE)
   if (MSVC)
     target_link_libraries(arangoserver
       Wldap32.lib
+      Bcrypt.lib
     )
   else()
     target_link_libraries(arangoserver
