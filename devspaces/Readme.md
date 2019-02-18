@@ -66,5 +66,5 @@ mkdir -p build && cd build/ && cmake .. && make
 ```
 8 - Run
 ```bash
-bin/arangod -c etc/relative/arangod.conf --server.endpoint tcp://0.0.0.0:8529 /tmp/database-dir 
+cd .. && build/bin/arangod -c etc/relative/arangod.conf --server.endpoint tcp://0.0.0.0:8529 /tmp/database-dir 
 ```
