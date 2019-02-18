@@ -55,13 +55,16 @@ devspaces info arangodb
 ```bash
 devspaces exec arangodb
 ```
-
-6 - Build
+6 - Clone 
+```bash
+git clone https://github.com/trilogy-group/arangodb
+```
+7 - Build
 
 ```bash
 mkdir -p build && cd build/ && cmake .. && make 
 ```
-7 - Run
+8 - Run
 ```bash
 bin/arangod -c etc/relative/arangod.conf --server.endpoint tcp://0.0.0.0:8529 /tmp/database-dir 
 ```
